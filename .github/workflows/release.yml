@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: An existing tag to build and publish
+        description: An existing tag, as a bare name such as v1.0.1
         required: true
 
 # Needed to create the release and upload its asset. The repository's default
@@ -30,10 +30,21 @@ jobs:
           # Full history, so the generated notes can diff against the last tag.
           fetch-depth: 0
 
+      # Values reach the shell through the environment rather than being pasted
+      # into the script by `${{ }}`. The dispatch input is free text, and text
+      # substituted before bash parses the line can end the quoted argument and
+      # run something else.
       - name: Resolve version
         id: version
+        env:
+          RAW_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          # Accept a bare tag or a fully-qualified ref.
+          TAG="${RAW_TAG#refs/tags/}"
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "::error::Expected a tag like v1.0.1, got '$TAG'"; exit 1 ;;
+          esac
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "number=${TAG#v}" >> "$GITHUB_OUTPUT"
 
@@ -54,6 +65,8 @@ jobs:
       # MARKETING_VERSION comes from the tag, so the About box agrees with the
       # release instead of drifting from it.
       - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.number }}
         run: |
           xcodebuild build \
             -project requester.xcodeproj \
@@ -61,22 +74,25 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS' \
             -derivedDataPath build \
-            MARKETING_VERSION="${{ steps.version.outputs.number }}" \
+            MARKETING_VERSION="$VERSION" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY=- \
             DEVELOPMENT_TEAM=""
 
       - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.number }}
         run: |
           cd build/Build/Products/Release
           ditto -c -k --keepParent Requester.app \
-            "$GITHUB_WORKSPACE/Requester-${{ steps.version.outputs.number }}.zip"
+            "$GITHUB_WORKSPACE/Requester-$VERSION.zip"
 
       # The caveat first, then GitHub's generated changelog appended. Composed
       # here rather than with --generate-notes so both end up in one body.
       - name: Compose notes
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           cat > notes.md <<'NOTES'
           ### Install
@@ -95,15 +111,20 @@ jobs:
           ---
 
           NOTES
+          # A warning rather than a silent pass: losing the changelog should be
+          # visible in the run, not discovered in the published release.
           gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
-            -f tag_name="${{ steps.version.outputs.tag }}" \
-            --jq .body >> notes.md || true
+            -f tag_name="$TAG" \
+            --jq .body >> notes.md \
+            || echo "::warning::Could not generate the changelog section"
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.number }}
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "Requester ${{ steps.version.outputs.number }}" \
+          gh release create "$TAG" \
+            --title "Requester $VERSION" \
             --notes-file notes.md \
-            "Requester-${{ steps.version.outputs.number }}.zip"
+            "Requester-$VERSION.zip"
