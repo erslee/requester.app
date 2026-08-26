@@ -63,7 +63,9 @@ struct BodyTabView: View {
     }
 
     private var graphQLEditors: some View {
-        VerticalSplit(minTopHeight: 120, minBottomHeight: 100, initialTopFraction: 0.6) {
+        ResizableSplit(
+            axis: .vertical, minimumFirst: 120, minimumSecond: 100, initialFraction: 0.6
+        ) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("QUERY").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 PlaceholderCodeEditor(
@@ -73,7 +75,7 @@ struct BodyTabView: View {
                 )
             }
             .padding(.bottom, 6)
-        } bottom: {
+        } second: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("VARIABLES (JSON)")
                     .font(.caption.weight(.semibold)).foregroundStyle(.secondary)

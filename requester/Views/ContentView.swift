@@ -1,10 +1,18 @@
 import SwiftUI
 
 /// The main window: sidebar, then either the project detail or the editor over
-/// the response panel, with history in a collapsible inspector on the right.
+/// the response panel, with history in a collapsible pane on the right.
 struct ContentView: View {
-    /// Enough for the widest table the detail pane shows.
-    static let detailMinimumWidth: CGFloat = 520
+    /// One width budget for the whole window. None of the three panes can be
+    /// compressed below these, so the window is not allowed to be narrower than
+    /// their sum -- otherwise the layout would have to overflow to satisfy them.
+    static let sidebarMinimumWidth: CGFloat = 190
+    static let detailMinimumWidth: CGFloat = 460
+    static let inspectorMinimumWidth: CGFloat = 250
+
+    static var minimumWindowWidth: CGFloat {
+        sidebarMinimumWidth + detailMinimumWidth + inspectorMinimumWidth
+    }
 
     @Bindable var model: AppModel
     @State private var isHistoryVisible = true
@@ -12,17 +20,28 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             SidebarView(model: model)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 380)
+                .navigationSplitViewColumnWidth(
+                    min: Self.sidebarMinimumWidth, ideal: 240, max: 340
+                )
         } detail: {
-            detail
-                // Claims its own share of the window, so the sidebar and the
-                // inspector keep theirs. The three minimums plus the window's
-                // own minimum width are one budget: 200 + 520 + 260 < 1180.
-                .frame(minWidth: Self.detailMinimumWidth)
-                .inspector(isPresented: $isHistoryVisible) {
+            // History sits in a split this view measures, rather than in an
+            // `.inspector`. The inspector autosaved an absolute width, so one
+            // captured in a narrow window came back unchanged in a wide one and
+            // left the panel a sliver of its minimum.
+            if isHistoryVisible {
+                ResizableSplit(
+                    axis: .horizontal,
+                    minimumFirst: Self.detailMinimumWidth,
+                    minimumSecond: Self.inspectorMinimumWidth,
+                    initialFraction: 0.72
+                ) {
+                    detail
+                } second: {
                     HistoryPanelView(model: model, history: model.historyPanel)
-                        .inspectorColumnWidth(min: 260, ideal: 320, max: 480)
                 }
+            } else {
+                detail
+            }
         }
         .toolbar {
             ToolbarItem {
@@ -78,9 +97,11 @@ struct ContentView: View {
             ProjectDetailView(model: model, projectID: projectID)
 
         case .request:
-            VerticalSplit(minTopHeight: 240, minBottomHeight: 200) {
+            ResizableSplit(
+                axis: .vertical, minimumFirst: 240, minimumSecond: 200
+            ) {
                 RequestEditorView(model: model, editor: model.editor)
-            } bottom: {
+            } second: {
                 ResponsePanelView(
                     entry: model.editor.lastEntry, isSending: model.editor.isSending
                 )

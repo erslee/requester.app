@@ -24,11 +24,16 @@ struct RequesterApp: App {
                     }
                 }
             }
-            // Wide enough for the sidebar, the editor, and the history
-            // inspector at their minimums. Any narrower and the split view
-            // lays out wider than the window, pushing the sidebar off its
-            // left edge where it cannot be clicked.
-            .frame(minWidth: 1180, minHeight: 700)
+            // SwiftUI turns this into the window's own minimum, so dragging an
+            // edge stops here. What it does *not* do is correct a frame restored
+            // from a previous launch that is already smaller -- and a window
+            // narrower than its content is exactly what left the sidebar and
+            // inspector hanging outside the edges. WindowMinimumSize fixes that
+            // case up.
+            .frame(minWidth: ContentView.minimumWindowWidth, minHeight: 560)
+            .background(
+                WindowMinimumSize(width: ContentView.minimumWindowWidth, height: 560)
+            )
             .fileImporter(
                 isPresented: $launch.isChoosingFolder,
                 allowedContentTypes: [.folder],
