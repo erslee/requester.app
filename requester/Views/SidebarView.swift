@@ -26,7 +26,7 @@ struct SidebarView: View {
                     .contextMenu { projectMenu(project.id) }
 
                 if model.isExpanded(project.id) {
-                    ForEach(model.requestsByProject[project.id] ?? []) { request in
+                    ForEach(model.visibleRequests(in: project.id)) { request in
                         requestRow(request, in: project.id)
                             .tag(
                                 SidebarSelection.request(
@@ -61,6 +61,9 @@ struct SidebarView: View {
         }
         .sheet(item: $model.importSummary) { summary in
             ImportSummaryView(summary: summary)
+        }
+        .sheet(item: $model.specSummary) { summary in
+            SpecSyncSummaryView(summary: summary.result)
         }
         .alert("New Project", isPresented: $isCreatingProject) {
             TextField("Project name", text: $newProjectName)
@@ -176,6 +179,7 @@ struct SidebarView: View {
 
     private func requestRow(_ request: APIRequest, in projectID: String) -> some View {
         let isDirty = model.editor.isDirty && model.editor.draft?.id == request.id
+        let isRemoved = request.spec?.isRemoved == true
 
         return HStack(spacing: 6) {
             Text(request.method.rawValue)
@@ -187,6 +191,7 @@ struct SidebarView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .italic(isDirty)
+                .strikethrough(isRemoved)
 
             if isDirty {
                 Circle()
@@ -195,8 +200,20 @@ struct SidebarView: View {
                     .help("Unsaved changes")
             }
         }
+        // Dimmed rather than disabled: the endpoint is gone from the document,
+        // but the request is still entirely usable -- open it, edit it, send it,
+        // read its history.
+        .opacity(isRemoved ? 0.55 : 1)
+        .help(isRemoved ? removedHelp(request) : "")
         .padding(.vertical, 2)
         .padding(.leading, 20)
+    }
+
+    private func removedHelp(_ request: APIRequest) -> String {
+        guard let removedAt = request.spec?.removedAt else { return "" }
+        return "No longer in the API document as of "
+            + removedAt.formatted(date: .abbreviated, time: .shortened)
+            + ". Kept, and still usable."
     }
 
     // MARK: - Menus
@@ -205,6 +222,11 @@ struct SidebarView: View {
     private func projectMenu(_ projectID: String) -> some View {
         Button("New Request") {
             Task { await model.createRequest(projectID: projectID) }
+        }
+        let removed = model.removedRequestCount(in: projectID)
+        if removed > 0 || model.showsRemovedEndpoints {
+            Divider()
+            Toggle("Show Removed Endpoints (\(removed))", isOn: $model.showsRemovedEndpoints)
         }
         Divider()
         Button("Rename Project…") { renameTarget = .project(projectID) }

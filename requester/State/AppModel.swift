@@ -16,6 +16,7 @@ final class AppModel {
 
     let editor: EditorModel
     let historyPanel: HistoryModel
+    let specSync: SpecSyncService
 
     var projectList: [Project] = []
     var requestsByProject: [String: [APIRequest]] = [:]
@@ -40,6 +41,19 @@ final class AppModel {
     /// moment the import finished.
     var isChoosingImportFile = false
     var isImporting = false
+
+    /// Whether the file picker for an API document is open, and whether a sync
+    /// is running -- separate for the same reason as the import pair above.
+    var isChoosingSpecFile = false
+    var isSyncingSpec = false
+
+    /// Shown after a sync, so what changed is visible rather than silent.
+    var specSummary: SpecSyncSummary?
+
+    struct SpecSyncSummary: Identifiable {
+        let id = UUID()
+        var result: SpecSyncService.Summary
+    }
 
     struct ImportSummary: Identifiable {
         let id = UUID()
@@ -74,6 +88,9 @@ final class AppModel {
             )
         )
         self.historyPanel = HistoryModel(query: HistoryQuery(storage: storage), history: history)
+        self.specSync = SpecSyncService(
+            requests: requests, projects: projects, variables: variables, fetcher: SpecFetcher()
+        )
 
         editor.onSaved = { [weak self] request in
             await self?.reloadRequests(projectID: request.projectID)
@@ -157,6 +174,33 @@ final class AppModel {
     /// by default and a newly loaded one does not appear empty.
     private var collapsedProjectIDs: Set<String> = [] {
         didSet { interfaceState.collapsedProjectIDs = collapsedProjectIDs }
+    }
+
+    /// Whether removed endpoints are listed. Remembered across launches, and
+    /// forced on while one is selected -- hiding the row under the pane the
+    /// user is looking at would strand them on a detail view with nothing in
+    /// the sidebar pointing at it.
+    var showsRemovedEndpoints: Bool {
+        get { interfaceState.showsRemovedEndpoints || selectedRequestIsRemoved }
+        set { interfaceState.showsRemovedEndpoints = newValue }
+    }
+
+    private var selectedRequestIsRemoved: Bool {
+        guard case .request(let projectID, let requestID)? = selection else { return false }
+        return (requestsByProject[projectID] ?? [])
+            .first { $0.id == requestID }?.spec?.isRemoved == true
+    }
+
+    /// The rows the sidebar shows for a project.
+    func visibleRequests(in projectID: String) -> [APIRequest] {
+        let all = requestsByProject[projectID] ?? []
+        guard !showsRemovedEndpoints else { return all }
+        return all.filter { $0.spec?.isRemoved != true }
+    }
+
+    /// How many are hidden right now, so the toggle can say what it would reveal.
+    func removedRequestCount(in projectID: String) -> Int {
+        (requestsByProject[projectID] ?? []).count { $0.spec?.isRemoved == true }
     }
 
     func isExpanded(_ projectID: String) -> Bool {
@@ -367,13 +411,103 @@ final class AppModel {
                 scriptsNeedingReview: collection.scriptsNeedingReview
             )
         } catch {
-            errorMessage = [
-                (error as? any LocalizedError)?.errorDescription ?? error.localizedDescription,
-                (error as? any LocalizedError)?.recoverySuggestion,
-            ]
+            errorMessage = Self.describe(error)
+        }
+    }
+
+    // MARK: - API documents
+
+    /// Attaches a link and reads it straight away.
+    ///
+    /// A failed first read leaves the source attached rather than discarding it:
+    /// the usual reason is a missing token, and throwing away what was typed
+    /// would mean typing it again.
+    func attachSpecLink(projectID: String, url: String, headers: [KeyValueItem]) async {
+        var source = SpecSource(kind: .url)
+        source.url = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        source.headers = headers
+        await run { _ = try await self.projects.setSpecSource(source, for: projectID) }
+        await reloadProjects()
+        await syncSpec(projectID: projectID, using: .saved)
+    }
+
+    /// Re-reads the attached link. The manual refresh, and the only thing that
+    /// triggers a sync of a link -- nothing re-reads it on its own.
+    func updateSpecFromRemote(projectID: String) async {
+        await syncSpec(projectID: projectID, using: .saved)
+    }
+
+    /// Takes a newly picked file through the identical merge path a link
+    /// refresh uses, which is what makes re-uploading behave like updating.
+    func replaceSpecFile(projectID: String, url: URL) async {
+        if projectList.first(where: { $0.id == projectID })?.specSource == nil {
+            await run {
+                _ = try await self.projects.setSpecSource(SpecSource(kind: .file), for: projectID)
+            }
+        }
+        await syncSpec(projectID: projectID, using: .file(url))
+    }
+
+    /// Saves edits to the source -- its URL and headers -- without syncing.
+    func saveSpecSource(projectID: String, source: SpecSource) async {
+        await run { _ = try await self.projects.setSpecSource(source, for: projectID) }
+        await reloadProjects()
+    }
+
+    /// Drops the link and leaves every request exactly as it is, spec links
+    /// included, so re-attaching the same document reconciles rather than
+    /// duplicating.
+    func detachSpec(projectID: String) async {
+        await run { _ = try await self.projects.setSpecSource(nil, for: projectID) }
+        await reloadProjects()
+    }
+
+    private func syncSpec(projectID: String, using source: SpecSyncService.Source) async {
+        guard !isSyncingSpec else { return }
+        isSyncingSpec = true
+        defer { isSyncingSpec = false }
+
+        // Commit whatever the autosave timer has not written yet: the sync reads
+        // requests off disk, so a pending edit would be invisible to it and then
+        // lost when the reload below replaces the draft.
+        await editor.flushAutosave()
+
+        do {
+            let summary = try await specSync.sync(projectID: projectID, using: source)
+            await reloadProjects()
+            await reloadRequests(projectID: projectID)
+            await reloadVariables(projectID: projectID)
+            if summary.hasChanges { await reloadEditedRequest(in: projectID) }
+            specSummary = SpecSyncSummary(result: summary)
+        } catch {
+            errorMessage = Self.describe(error)
+        }
+    }
+
+    /// Brings the open editor back in line with what the sync wrote, so the
+    /// request on screen is not a stale copy of one that just changed.
+    private func reloadEditedRequest(in projectID: String) async {
+        guard case .request(let selected, let requestID)? = selection, selected == projectID
+        else { return }
+        await run {
+            if let request = try await self.requests.get(
+                projectID: projectID, requestID: requestID
+            ) {
+                self.editor.load(request)
+            }
+        }
+    }
+
+    /// Includes the recovery suggestion, so a message says what to do next
+    /// rather than only what went wrong.
+    private static func describe(_ error: any Error) -> String {
+        guard let localized = error as? any LocalizedError else {
+            return error.localizedDescription
+        }
+        return [localized.errorDescription ?? error.localizedDescription,
+                localized.recoverySuggestion]
             .compactMap(\.self)
             .joined(separator: " ")
-        }
     }
 
     // MARK: - Variables

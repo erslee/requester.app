@@ -4,6 +4,15 @@ nonisolated struct Project: Codable, Sendable, Hashable, Identifiable {
     var id: String
     var name: String
     var description: String = ""
+
+    /// The OpenAPI document this project's requests are synced from, if any.
+    ///
+    /// Optional rather than defaulted: Swift's synthesized `Decodable` ignores
+    /// property defaults and throws on a missing key, so a non-optional field
+    /// would stop every `project.json` written before this existed from
+    /// loading. An optional decodes through `decodeIfPresent` and arrives nil.
+    var specSource: SpecSource?
+
     var createdAt: Date
     var updatedAt: Date
 

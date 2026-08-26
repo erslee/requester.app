@@ -71,6 +71,20 @@ struct ImportSummaryView: View {
         note: String?,
         rows: [String]
     ) -> some View {
+        SummarySection(title: title, systemImage: systemImage, tint: tint, note: note, rows: rows)
+    }
+}
+
+/// A titled, scrollable list of notes, shared by the summaries an import and a
+/// spec sync each show.
+struct SummarySection: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+    var note: String?
+    let rows: [String]
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label(title, systemImage: systemImage)
                 .font(.subheadline.weight(.semibold))

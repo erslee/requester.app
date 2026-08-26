@@ -12,6 +12,7 @@ final class InterfaceStateStore {
     private enum Key {
         static let collapsedProjects = "sidebarCollapsedProjectIDs"
         static let selection = "sidebarSelection"
+        static let showsRemoved = "sidebarShowsRemovedEndpoints"
     }
 
     private let defaults: UserDefaults
@@ -29,6 +30,14 @@ final class InterfaceStateStore {
             }
             defaults.set(newValue.sorted(), forKey: Key.collapsedProjects)
         }
+    }
+
+    /// Whether endpoints a spec has dropped are listed. Off by default: the
+    /// common case is wanting the sidebar to match the document, with the
+    /// removed ones a deliberate look rather than permanent clutter.
+    var showsRemovedEndpoints: Bool {
+        get { defaults.bool(forKey: Key.showsRemoved) }
+        set { defaults.set(newValue, forKey: Key.showsRemoved) }
     }
 
     var selection: SidebarSelection? {

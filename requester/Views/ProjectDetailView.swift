@@ -17,6 +17,8 @@ struct ProjectDetailView: View {
                 .font(.system(size: 22, weight: .semibold))
                 .onSubmit(commitName)
 
+            SpecSectionView(model: model, projectID: projectID)
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("VARIABLES — use as {{name}} in any request in this project")
                     .font(.caption.weight(.semibold))

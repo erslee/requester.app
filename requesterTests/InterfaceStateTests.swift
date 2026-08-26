@@ -162,3 +162,73 @@ struct InterfaceStateTests {
         #expect(InterfaceStateStore(defaults: defaults).collapsedProjectIDs.isEmpty)
     }
 }
+
+/// Which rows the sidebar draws for a project, and the guard that keeps the
+/// selected one from vanishing out from under the user.
+@MainActor
+struct RemovedEndpointVisibilityTests {
+    private func makeModel() -> AppModel {
+        AppModel(
+            storage: InMemoryStorage(),
+            interfaceState: InterfaceStateStore(
+                defaults: UserDefaults(suiteName: "requester-tests-\(UUID().uuidString)")!
+            )
+        )
+    }
+
+    private func request(_ id: String, removed: Bool) -> APIRequest {
+        var request = APIRequest(id: id, projectID: "p1")
+        request.spec = SpecLink(key: "operationId:\(id)")
+        if removed { request.spec?.removedAt = Date() }
+        return request
+    }
+
+    @Test func removedEndpointsAreHiddenUntilAskedFor() {
+        // Arrange
+        let model = makeModel()
+        model.requestsByProject["p1"] = [
+            request("live", removed: false),
+            request("gone", removed: true),
+        ]
+
+        // Assert -- hidden by default, and counted so the toggle can say so
+        #expect(model.visibleRequests(in: "p1").map(\.id) == ["live"])
+        #expect(model.removedRequestCount(in: "p1") == 1)
+
+        // Act
+        model.showsRemovedEndpoints = true
+
+        // Assert
+        #expect(model.visibleRequests(in: "p1").map(\.id) == ["live", "gone"])
+    }
+
+    /// Selecting a removed endpoint and then hiding removed endpoints would
+    /// otherwise leave the detail pane showing a request with no row anywhere.
+    @Test func theSelectedRemovedEndpointStaysVisible() {
+        // Arrange
+        let model = makeModel()
+        model.requestsByProject["p1"] = [
+            request("live", removed: false),
+            request("gone", removed: true),
+        ]
+        model.showsRemovedEndpoints = false
+
+        // Act
+        model.selection = .request(projectID: "p1", requestID: "gone")
+
+        // Assert
+        #expect(model.showsRemovedEndpoints)
+        #expect(model.visibleRequests(in: "p1").map(\.id) == ["live", "gone"])
+    }
+
+    @Test func aHandMadeRequestIsNeverHidden() {
+        // Arrange
+        let model = makeModel()
+        model.requestsByProject["p1"] = [APIRequest(id: "mine", projectID: "p1")]
+
+        // Act / Assert
+        #expect(model.visibleRequests(in: "p1").map(\.id) == ["mine"])
+        #expect(model.removedRequestCount(in: "p1") == 0)
+    }
+}
+

@@ -39,6 +39,20 @@ nonisolated struct ProjectRepository: Sendable {
         return project
     }
 
+    /// Points the project at an OpenAPI document, or detaches it when given
+    /// `nil`. Detaching leaves every request exactly as it is -- including the
+    /// spec links on them, so re-attaching the same document reconciles with
+    /// what is already there instead of duplicating it.
+    func setSpecSource(_ source: SpecSource?, for projectID: String) async throws -> Project {
+        guard var project = try await get(projectID) else {
+            throw StorageError.notFound("project \(projectID)")
+        }
+        project.specSource = source
+        project.updatedAt = Date()
+        try await storage.writeModel(project, to: path(for: projectID))
+        return project
+    }
+
     /// Deleting a project takes its requests, history, and variables with it.
     func delete(_ projectID: String) async throws {
         try await storage.deleteTree(at: "projects/\(projectID)")

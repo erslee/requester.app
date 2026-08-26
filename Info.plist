@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  App Transport Security is off, deliberately.
+
+	  This app's entire purpose is sending requests the user composes, to
+	  whatever host they type. ATS's default refusal of plain HTTP would make
+	  http://localhost:8080 unreachable — which is where an API being developed
+	  usually lives, and where its OpenAPI document usually lives with it. The
+	  same applies to reading a document over http.
+
+	  The trade-off is real and worth naming: nothing this app sends is checked
+	  for transport security any more, so a request to an http:// URL travels in
+	  the clear. That is the correct behaviour for an HTTP client — it is the
+	  user's call which host and scheme to use, and every other API client works
+	  this way — but it is a deliberate choice, not an oversight.
+
+	  Everything else in this file is generated: GENERATE_INFOPLIST_FILE stays on
+	  and merges the INFOPLIST_KEY_* build settings into this one.
+	-->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

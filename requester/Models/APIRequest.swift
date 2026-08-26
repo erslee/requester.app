@@ -98,6 +98,15 @@ nonisolated struct APIRequest: Codable, Sendable, Hashable, Identifiable {
     var auth = AuthConfig()
     var postResponseScript: String = ""
     var scriptTimeoutSeconds: Double = 5
+
+    /// Set on requests an OpenAPI spec created, `nil` on ones made by hand --
+    /// which is what keeps a sync from touching a hand-written request.
+    ///
+    /// Optional rather than defaulted for the same reason as `Project.specSource`:
+    /// a non-optional field would stop every request file written before this
+    /// existed from decoding.
+    var spec: SpecLink?
+
     var order: Int = 0
     var createdAt: Date
     var updatedAt: Date
@@ -129,6 +138,10 @@ nonisolated struct APIRequest: Codable, Sendable, Hashable, Identifiable {
         var copy = normalized
         copy.createdAt = .distantPast
         copy.updatedAt = .distantPast
+        // The spec link is bookkeeping, not authored content. A sync that marks
+        // an operation removed must not light up the editor's unsaved-changes
+        // dot on a request the user has not touched.
+        copy.spec = nil
         return copy
     }
 }
