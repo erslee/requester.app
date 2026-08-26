@@ -59,10 +59,15 @@ struct JSONFormatterTests {
         let formatted = JSONFormatter.prettyPrinted(truncated)
 
         // Assert -- everything up to the cut is laid out, and nothing is lost
-        let lines = formatted.split(separator: "\n")
-        #expect(lines.count == 8)
-        #expect(lines.first == "{")
-        #expect(formatted.contains(#""b": "cut off here"#))
+        #expect(formatted == """
+            {
+              "nodes": [
+                {
+                  "a": 1
+                },
+                {
+                  "b": "cut off here
+            """)
     }
 
     @Test func replacesTheInputsOwnWhitespace() {

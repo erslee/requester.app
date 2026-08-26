@@ -22,7 +22,7 @@ jobs:
     name: Unit tests
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Show toolchain
         run: xcodebuild -version && swift --version
@@ -44,7 +44,7 @@ jobs:
 
       - name: Upload results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-results
           path: TestResults.xcresult
@@ -58,7 +58,7 @@ jobs:
     # tests relaunch once to work around it, which is not always enough.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Test
         run: |
@@ -75,7 +75,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-test-results
           path: UITestResults.xcresult
@@ -85,7 +85,7 @@ jobs:
     runs-on: macos-26
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build
         run: |
@@ -107,7 +107,7 @@ jobs:
           cd build/Build/Products/Release
           ditto -c -k --sequesterRsrc --keepParent Requester.app "$GITHUB_WORKSPACE/Requester.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Requester-app
           path: Requester.zip
