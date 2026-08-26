@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# A newer push supersedes an in-flight run on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned rather than left to the image default, which moves as new Xcode
+  # releases land. macos-26 ships 26.0 through 26.6.
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: xcodebuild -version && swift --version
+
+      # No signing credentials on a runner. Ad-hoc signing still applies the
+      # entitlements, so the sandboxed app builds and its tests run.
+      - name: Test
+        run: |
+          xcodebuild test \
+            -project requester.xcodeproj \
+            -scheme requester \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -only-testing:requesterTests \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM=""
+
+      - name: Upload results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: TestResults.xcresult
+
+  ui-test:
+    name: UI tests
+    runs-on: macos-26
+    # Not a merge gate. These drive the real app through the window server, and
+    # the first launch of a freshly built binary intermittently comes up with no
+    # window at all -- a harness quirk rather than a defect in the app. The
+    # tests relaunch once to work around it, which is not always enough.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: |
+          xcodebuild test \
+            -project requester.xcodeproj \
+            -scheme requester \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -only-testing:requesterUITests \
+            -resultBundlePath UITestResults.xcresult \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM=""
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-results
+          path: UITestResults.xcresult
+
+  build:
+    name: Release build
+    runs-on: macos-26
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project requester.xcodeproj \
+            -scheme requester \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath build \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM=""
+
+      # Ad-hoc signed, so it runs on the machine that built it but Gatekeeper
+      # will refuse it elsewhere. Handing it to someone else needs a Developer
+      # ID identity and notarisation, which need repository secrets.
+      - name: Package
+        run: |
+          cd build/Build/Products/Release
+          ditto -c -k --sequesterRsrc --keepParent Requester.app "$GITHUB_WORKSPACE/Requester.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Requester-app
+          path: Requester.zip

@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+
+# Xcode build output
+build/
+DerivedData/
+*.xcresult
+
+# Xcode per-user state: window positions, scheme selection, breakpoints.
+# Rewritten on every launch and meaningless to anyone else.
+xcuserdata/
+*.xcuserstate
+
+# Xcode leftovers
+*.hmap
+*.moved-aside
+*.dSYM
+*.dSYM.zip
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.build/
+.swiftpm/
