@@ -12,6 +12,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: CI only reads the repository. Publishing a release needs
+# write, and that lives in release.yml.
+permissions:
+  contents: read
+
 env:
   # Pinned rather than left to the image default, which moves as new Xcode
   # releases land. macos-26 ships 26.0 through 26.6.
