@@ -7,6 +7,14 @@ final class RequesterUITests: XCTestCase {
 
     private var window: XCUIElement { app.windows.firstMatch }
 
+    /// The window's own floor: `ContentView`'s sidebar, detail, and inspector
+    /// minimums (190 + 460 + 250), below which the three columns cannot fit.
+    /// Not the 1320 preferred default -- AppKit clamps a new window to the
+    /// display, and CI runs on a 1024x768 screen, so the default never applies
+    /// there. Duplicated rather than imported: a UI test drives the app from
+    /// another process and does not link it.
+    private static let minimumWindowWidth: CGFloat = 900
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
@@ -42,7 +50,11 @@ final class RequesterUITests: XCTestCase {
 
         // Assert -- a real window, wide enough for all three columns
         XCTAssertTrue(window.exists)
-        XCTAssertGreaterThanOrEqual(window.frame.width, 1180)
+        XCTAssertGreaterThanOrEqual(
+            window.frame.width,
+            Self.minimumWindowWidth,
+            "The window is narrower than its three columns need."
+        )
         XCTAssertTrue(
             window.buttons["Project"].isHittable,
             "The sidebar is outside the window and cannot be clicked."
