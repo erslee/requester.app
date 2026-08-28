@@ -21,6 +21,16 @@ nonisolated struct Project: Codable, Sendable, Hashable, Identifiable {
     /// loading. `nil` and `[]` mean the same thing -- no global headers.
     var globalHeaders: [KeyValueItem]?
 
+    /// Folders the user made by hand, outermost first.
+    ///
+    /// The sidebar's tree is mostly *derived* -- a folder exists because
+    /// requests are in it. This is what keeps an empty one alive: a folder made
+    /// and not yet filled would otherwise vanish on the next reload, which is
+    /// exactly the moment the user is about to drag something into it.
+    ///
+    /// Optional for the same reason as `specSource`.
+    var folders: [[String]]?
+
     var createdAt: Date
     var updatedAt: Date
 

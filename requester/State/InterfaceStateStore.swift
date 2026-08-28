@@ -66,9 +66,24 @@ final class InterfaceStateStore {
         }
     }
 
+    /// Folders the user has collapsed, by full path. Collapsed rather than
+    /// expanded, so a folder that appears from an import is open by default and
+    /// its contents are visible without hunting for them.
+    var collapsedFolders: Set<String> {
+        get { Set(defaults.stringArray(forKey: key("collapsedFolders")) ?? []) }
+        set {
+            guard !newValue.isEmpty else {
+                defaults.removeObject(forKey: key("collapsedFolders"))
+                return
+            }
+            defaults.set(newValue.sorted(), forKey: key("collapsedFolders"))
+        }
+    }
+
     /// Drops everything remembered about a project, for when it is deleted.
     func forgetProject() {
         defaults.removeObject(forKey: key("collapsed"))
+        defaults.removeObject(forKey: key("collapsedFolders"))
         defaults.removeObject(forKey: key("selection"))
     }
 }

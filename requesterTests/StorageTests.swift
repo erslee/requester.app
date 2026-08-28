@@ -38,6 +38,85 @@ actor InMemoryStorage: StorageBackend {
 }
 
 struct ProjectAndRequestRepositoryTests {
+    /// Folders are paths on requests plus a list on the project, so the
+    /// repository has to keep both in step.
+    @Test func movesRequestsBetweenFoldersAndRenamesWholeBranches() async throws {
+        // Arrange
+        let storage = InMemoryStorage()
+        let projects = ProjectRepository(storage: storage)
+        let requests = RequestRepository(storage: storage)
+        let project = try await projects.create(name: "Petstore")
+
+        let listUsers = try await requests.create(
+            projectID: project.id, name: "listUsers", folder: ["Users"]
+        )
+        let promote = try await requests.create(
+            projectID: project.id, name: "promote", folder: ["Users", "Admin"]
+        )
+        let loose = try await requests.create(projectID: project.id, name: "health")
+
+        // Assert -- a new request lands where it was told to
+        #expect(listUsers.folder == ["Users"])
+        #expect(loose.folder == [])
+
+        // Act -- move one request into a folder
+        _ = try await requests.move(projectID: project.id, requestID: loose.id, to: ["Pets"])
+
+        // Assert
+        var stored = try await requests.get(projectID: project.id, requestID: loose.id)
+        #expect(stored?.folder == ["Pets"])
+
+        // Act -- rename a folder: its descendants come with it
+        try await requests.moveFolder(projectID: project.id, from: ["Users"], to: ["People"])
+
+        // Assert
+        stored = try await requests.get(projectID: project.id, requestID: listUsers.id)
+        #expect(stored?.folder == ["People"])
+        stored = try await requests.get(projectID: project.id, requestID: promote.id)
+        #expect(stored?.folder == ["People", "Admin"])
+        // Untouched branches stay put
+        stored = try await requests.get(projectID: project.id, requestID: loose.id)
+        #expect(stored?.folder == ["Pets"])
+    }
+
+    @Test func deletingAFolderTakesItsSubtreeWithIt() async throws {
+        // Arrange
+        let storage = InMemoryStorage()
+        let projects = ProjectRepository(storage: storage)
+        let requests = RequestRepository(storage: storage)
+        let project = try await projects.create(name: "Petstore")
+
+        _ = try await requests.create(projectID: project.id, name: "a", folder: ["Users"])
+        _ = try await requests.create(
+            projectID: project.id, name: "b", folder: ["Users", "Admin"]
+        )
+        let kept = try await requests.create(projectID: project.id, name: "c", folder: ["Pets"])
+
+        // Act
+        try await requests.deleteFolder(projectID: project.id, folder: ["Users"])
+
+        // Assert -- the whole branch went, and nothing else did
+        let remaining = try await requests.listForProject(project.id)
+        #expect(remaining.map(\.id) == [kept.id])
+    }
+
+    /// An empty folder only exists because the project remembers it.
+    @Test func remembersHandMadeFoldersOnTheProject() async throws {
+        // Arrange
+        let storage = InMemoryStorage()
+        let projects = ProjectRepository(storage: storage)
+        let project = try await projects.create(name: "Petstore")
+
+        // Act -- duplicates and empty paths are not worth storing
+        let saved = try await projects.setFolders(
+            [["Scratch"], ["Scratch"], [], ["Users", "Admin"]], for: project.id
+        )
+
+        // Assert
+        #expect(saved.folders == [["Scratch"], ["Users", "Admin"]])
+        #expect(try await projects.get(project.id)?.folders == [["Scratch"], ["Users", "Admin"]])
+    }
+
     @Test func createsListsRenamesAndDeletesProjects() async throws {
         // Arrange
         let storage = InMemoryStorage()

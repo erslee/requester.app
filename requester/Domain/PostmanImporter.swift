@@ -13,6 +13,9 @@ import Foundation
 nonisolated enum PostmanImporter {
     struct Collection: Sendable {
         var name: String
+        /// Folders the collection declares that no request landed in -- an
+        /// empty folder is still part of the shape the user exported.
+        var folders: [[String]] = []
         /// Collection variables, which use the same `{{name}}` syntax as ours.
         var variables: [String: String]
         /// `id` and `projectID` are left empty for the caller to assign.
@@ -60,20 +63,25 @@ nonisolated enum PostmanImporter {
 
     // MARK: - Items
 
-    /// Walks the item tree. Folders have no equivalent here, so their names are
-    /// folded into the request name to keep the grouping legible.
+    /// Walks the item tree, keeping its shape: a Postman folder becomes a
+    /// folder here, and a request keeps its own short name rather than one with
+    /// the whole path glued on the front.
     private static func append(items: [Any], folder: [String], to result: inout Collection) {
         for case let item as [String: Any] in items {
             let name = (item["name"] as? String) ?? "Untitled"
 
             if let children = item["item"] as? [Any] {
+                // An empty Postman folder still becomes a folder here, so the
+                // imported collection looks like the one that was exported.
+                if children.isEmpty { result.folders.append(folder + [name]) }
                 append(items: children, folder: folder + [name], to: &result)
                 continue
             }
             guard let request = item["request"] else { continue }
 
             var imported = APIRequest(id: "", projectID: "", order: result.requests.count)
-            imported.name = (folder + [name]).joined(separator: " / ")
+            imported.name = name
+            imported.folder = folder
             apply(request: request, to: &imported, result: &result)
             applyScripts(from: item, to: &imported, result: &result)
             result.requests.append(imported)

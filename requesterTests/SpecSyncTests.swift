@@ -316,4 +316,63 @@ struct SpecSyncTests {
         #expect(plan.updated.first?.id == "r1")
         #expect(plan.removed.isEmpty)
     }
+
+    // MARK: - Folders
+
+    /// Where the user filed a request is theirs, exactly like what they named
+    /// it -- the tag places it once, at creation, and never again.
+    @Test func aReSyncLeavesARequestInTheFolderTheUserMovedItTo() {
+        // Arrange -- created under "Pets", since moved to "Favourites"
+        var incoming = operation(name: "Create a pet")
+        incoming.request.folder = ["Pets"]
+
+        var current = imported(incoming)
+        current.folder = ["Favourites"]
+        current.name = "Make a pet"
+
+        // Act
+        let merged = SpecSync.merged(incoming, into: current)
+
+        // Assert -- neither the folder nor the name was moved back
+        #expect(merged.folder == ["Favourites"])
+        #expect(merged.name == "Make a pet")
+    }
+
+    /// Before folders existed, the tag was glued onto the name. A re-sync
+    /// unfolds exactly that shape and leaves everything else alone.
+    @Test func aReSyncUnfoldsTheOldTagPrefixIntoAFolder() {
+        // Arrange -- a request as this app used to write them
+        var incoming = operation(name: "Create a pet")
+        incoming.request.folder = ["Pets"]
+
+        var current = imported(incoming)
+        current.name = "Pets / Create a pet"
+        current.folder = []
+
+        // Act
+        let merged = SpecSync.merged(incoming, into: current)
+
+        // Assert
+        #expect(merged.folder == ["Pets"])
+        #expect(merged.name == "Create a pet")
+    }
+
+    /// A request the user renamed no longer carries the prefix, so there is
+    /// nothing to unfold and nothing to move.
+    @Test func aRenamedRequestIsNotUnfolded() {
+        // Arrange
+        var incoming = operation(name: "Create a pet")
+        incoming.request.folder = ["Pets"]
+
+        var current = imported(incoming)
+        current.name = "My pet call"
+        current.folder = []
+
+        // Act
+        let merged = SpecSync.merged(incoming, into: current)
+
+        // Assert -- left exactly where and as it was
+        #expect(merged.folder == [])
+        #expect(merged.name == "My pet call")
+    }
 }

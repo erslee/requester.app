@@ -143,6 +143,7 @@ nonisolated enum OpenAPISpec {
         request.method = method
         request.url = "{{\(baseURLVariable)}}" + rewritingPathTemplates(in: path)
         request.name = name(for: raw, path: path, method: method)
+        request.folder = folder(for: raw)
 
         // `operationId` is the spec's own stable name for the endpoint and
         // survives a path being restructured, so it is preferred. Falling back
@@ -163,18 +164,22 @@ nonisolated enum OpenAPISpec {
         return Operation(key: key, request: request, generatedBody: generatedBody)
     }
 
-    /// `Users / listUsers`, matching how the Postman importer folds folders into
-    /// names -- this app has no grouping in the sidebar, so the grouping has to
-    /// live in the name to stay legible.
+    /// The operation's own name, without its tag -- the tag becomes the folder
+    /// it lands in instead. See `folder(for:)`.
     private static func name(
         for raw: [String: Any], path: String, method: HTTPMethod
     ) -> String {
-        let leaf = (raw["summary"] as? String)?.trimmed.nonEmpty
+        (raw["summary"] as? String)?.trimmed.nonEmpty
             ?? (raw["operationId"] as? String)?.trimmed.nonEmpty
             ?? "\(method.rawValue) \(path)"
+    }
 
-        guard let tag = (raw["tags"] as? [String])?.first?.trimmed.nonEmpty else { return leaf }
-        return "\(tag) / \(leaf)"
+    /// The first tag, as a one-level folder. Only the first: a tag list is a
+    /// set of labels, not a path, and an operation can only be in one place in
+    /// a tree. An untagged operation sits at the project's top level.
+    private static func folder(for raw: [String: Any]) -> [String] {
+        guard let tag = (raw["tags"] as? [String])?.first?.trimmed.nonEmpty else { return [] }
+        return [tag]
     }
 
     // MARK: - Parameters

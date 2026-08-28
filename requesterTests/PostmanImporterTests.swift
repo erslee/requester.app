@@ -41,20 +41,27 @@ struct PostmanImporterTests {
 
     /// Folders have no equivalent, so their names are kept in the request name
     /// rather than thrown away.
-    @Test func flattensFoldersIntoRequestNames() throws {
+    /// A collection's folders are the shape the user exported, so they come
+    /// across as folders -- the request keeps its own short name.
+    @Test func keepsFoldersAsFolders() throws {
         // Arrange / Act
         let imported = try collection(
             wrap(#"""
             {"name":"Kraken","item":[
               {"name":"Outer","request":{"method":"GET","url":"https://x.com/1"}},
-              {"name":"Inner","item":[{"name":"Deep","request":{"method":"GET","url":"https://x.com/2"}}]}
+              {"name":"Inner","item":[{"name":"Deep","request":{"method":"GET","url":"https://x.com/2"}}]},
+              {"name":"Empty","item":[]}
             ]}
             """#)
         )
 
-        // Assert
-        #expect(imported.requests.map(\.name) == ["Kraken / Outer", "Kraken / Inner / Deep"])
+        // Assert -- names are the leaf, the path is the folder
+        #expect(imported.requests.map(\.name) == ["Outer", "Deep"])
+        #expect(imported.requests.map(\.folder) == [["Kraken"], ["Kraken", "Inner"]])
         #expect(imported.requests.map(\.order) == [0, 1])
+
+        // Assert -- a folder with nothing in it is still part of the shape
+        #expect(imported.folders == [["Kraken", "Empty"]])
     }
 
     @Test func assemblesAURLFromItsPartsWhenRawIsAbsent() throws {
@@ -272,4 +279,5 @@ struct PostmanScriptTests {
         #expect(translated.contains("response.statusCode"))
         #expect(PostmanScript.stillReferencesPostman(translated))
     }
+
 }

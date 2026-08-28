@@ -19,6 +19,13 @@ a new window, **⌘O** brings the launcher back.
 API key), and a post-response script, per request. Method, URL, and everything else
 autosave shortly after you stop typing.
 
+**Folders** — Requests can live in folders, nested as deep as you like. Importing a
+Postman collection keeps its folder tree, and an OpenAPI document files each operation
+under its first tag. Drag a request or a folder onto another folder to move it; the
+project row is the drop target for "out of every folder". New Folder, Rename, and Delete
+are on the right-click menu of a folder or the project. Where you file something is
+yours: a re-sync never moves a request you have put somewhere.
+
 **Filter** — A filter field sits at the bottom of the sidebar, next to the new-request
 button. Typing narrows the list to requests whose name, URL, or method match; Escape
 clears it, **⇧⌘F** puts the cursor in it. The request you have open stays listed even
@@ -122,7 +129,8 @@ Everything is plain files:
 
 ```
 projects/<projectID>/project.json              project metadata + global headers
-projects/<projectID>/requests/<requestID>.json  one file per request
+projects/<projectID>/requests/<requestID>.json  one file per request (folder is a
+                                               path on the request, not a directory)
 variables/<projectID>.json                      project variables
 history/<projectID>/YYYY-MM.jsonl               append-only, one line per send
 history/<projectID>/blobs/<entryID>.body        response bodies too large to inline

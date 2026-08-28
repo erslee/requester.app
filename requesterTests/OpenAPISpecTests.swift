@@ -87,9 +87,37 @@ struct OpenAPISpecTests {
         )
     }
 
-    @Test func namesAnOperationByTagAndSummary() throws {
+    /// The summary names the request; the tag files it. Gluing the two together
+    /// is what this did before the sidebar had folders.
+    @Test func namesAnOperationBySummaryAndFilesItUnderItsTag() throws {
         let document = try parse(petstore)
-        #expect(document.operations.map(\.request.name).contains("Pets / List pets"))
+        let listPets = try #require(
+            document.operations.first { $0.key == "operationId:listPets" }
+        )
+
+        #expect(listPets.request.name == "List pets")
+        #expect(listPets.request.folder == ["Pets"])
+    }
+
+    /// A tag list is a set of labels, not a path, and a request can only be in
+    /// one place -- so only the first is used, and no tag means top level.
+    @Test func usesOnlyTheFirstTagAndLeavesUntaggedOperationsAtTheTop() throws {
+        let document = try parse(#"""
+            {
+              "openapi": "3.0.0",
+              "info": { "title": "X" },
+              "paths": {
+                "/a": { "get": { "operationId": "many", "tags": ["First", "Second"] } },
+                "/b": { "get": { "operationId": "none" } }
+              }
+            }
+            """#)
+
+        let many = try #require(document.operations.first { $0.key == "operationId:many" })
+        let none = try #require(document.operations.first { $0.key == "operationId:none" })
+
+        #expect(many.request.folder == ["First"])
+        #expect(none.request.folder == [])
     }
 
     /// Identity has to survive a rename, so operationId is preferred over the path.

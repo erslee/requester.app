@@ -43,6 +43,19 @@ final class AppModel {
     /// can close itself rather than sit on an empty tree.
     private(set) var wasDeleted = false
 
+    /// The row the sidebar should scroll into view.
+    ///
+    /// Set only when something other than a click moves the selection -- so
+    /// far, creating a request. A click is already on screen, and scrolling to
+    /// centre it would pull the list out from under the pointer. The sidebar
+    /// clears this once it has scrolled.
+    var pendingScrollTarget: SidebarSelection?
+
+    /// Folders the user has collapsed, by full path.
+    private var collapsedFolders: Set<String> = [] {
+        didSet { interfaceState.collapsedFolders = collapsedFolders }
+    }
+
     var selection: SidebarSelection? {
         didSet {
             interfaceState.selection = selection
@@ -142,6 +155,7 @@ final class AppModel {
     /// no way back. Falling back to the project's own pane is always valid.
     private func restoreInterfaceState() {
         isProjectCollapsed = interfaceState.isProjectCollapsed
+        collapsedFolders = interfaceState.collapsedFolders
 
         guard let saved = interfaceState.selection,
               saved.projectID == projectID,
@@ -322,6 +336,11 @@ final class AppModel {
             case .project(let projectID):
                 editor.clear()
                 await historyPanel.showProject(projectID)
+            case .folder(let projectID, _):
+                // A folder has no request to open, and its history is the
+                // project's -- there is no per-folder history to scope to.
+                editor.clear()
+                await historyPanel.showProject(projectID)
             case .request(let projectID, let requestID):
                 await run {
                     guard let request = try await self.requests.get(
@@ -367,14 +386,20 @@ final class AppModel {
         }
     }
 
-    func createRequest(projectID: String) async {
+    func createRequest(projectID: String, folder: [String] = []) async {
         await run {
-            let request = try await self.requests.create(projectID: projectID)
-            // Expand first: a row inside a collapsed project cannot be selected,
-            // and the List would snap the selection back.
+            let request = try await self.requests.create(projectID: projectID, folder: folder)
+            // Expand first: a row inside a collapsed project or folder cannot
+            // be selected, and the List would snap the selection back.
             self.isProjectCollapsed = false
+            self.expand(folder: folder)
             await self.reloadRequests(projectID: projectID)
-            self.selection = .request(projectID: projectID, requestID: request.id)
+
+            let target = SidebarSelection.request(projectID: projectID, requestID: request.id)
+            self.selection = target
+            // Creating a request in a long tree otherwise puts it somewhere off
+            // screen and silently swaps the editor to it.
+            self.pendingScrollTarget = target
         }
     }
 
@@ -493,6 +518,142 @@ final class AppModel {
             .joined(separator: " ")
     }
 
+    // MARK: - Folders
+
+    /// The project's tree: folders, nested, with the requests in each.
+    ///
+    /// Built from the requests the sidebar would show, so filtering narrows the
+    /// tree rather than sitting beside it -- a folder with no surviving request
+    /// in it simply stops being drawn, unless the user made it by hand.
+    var folderTree: FolderTree.Node {
+        FolderTree.roots(
+            requests: visibleRequests(in: projectID),
+            declared: isFiltering ? [] : (project?.folders ?? [])
+        )
+    }
+
+    /// The sidebar's rows, in the order it draws them.
+    var sidebarRows: [FolderTree.Row] {
+        FolderTree.flattened(folderTree) { isExpanded(folder: $0) }
+    }
+
+    /// Every folder that exists, for naming a new one and for validating a move.
+    var allFolderPaths: Set<[String]> {
+        FolderTree.allPaths(
+            requests: requestsByProject[projectID] ?? [], declared: project?.folders ?? []
+        )
+    }
+
+    /// While filtering, folders are forced open: a match hidden inside a
+    /// collapsed folder would look like the filter had found nothing.
+    func isExpanded(folder path: [String]) -> Bool {
+        isFiltering || !collapsedFolders.contains(FolderTree.identifier(for: path))
+    }
+
+    /// Opens a folder and every folder above it, so a row inside it can be
+    /// shown at all.
+    func expand(folder path: [String]) {
+        guard !path.isEmpty else { return }
+        for depth in 1...path.count {
+            collapsedFolders.remove(FolderTree.identifier(for: Array(path.prefix(depth))))
+        }
+    }
+
+    func toggleExpansion(folder path: [String]) {
+        let id = FolderTree.identifier(for: path)
+        if collapsedFolders.contains(id) {
+            collapsedFolders.remove(id)
+        } else {
+            collapsedFolders.insert(id)
+        }
+    }
+
+    /// Makes a folder inside `parent`, named around whatever is already there.
+    func createFolder(in parent: [String] = []) async {
+        let name = FolderTree.availableName("New Folder", in: parent, among: allFolderPaths)
+        await run {
+            _ = try await self.projects.setFolders(
+                (self.project?.folders ?? []) + [parent + [name]], for: self.projectID
+            )
+            await self.reloadProjects()
+        }
+    }
+
+    /// Moves one request into a folder.
+    func move(requestID: String, to folder: [String]) async {
+        await run {
+            guard try await self.requests.move(
+                projectID: self.projectID, requestID: requestID, to: folder
+            ) != nil else { return }
+            await self.reloadRequests(projectID: self.projectID)
+        }
+    }
+
+    /// Re-parents a folder, bringing its requests and subfolders with it.
+    ///
+    /// Refused when the destination is inside the folder being moved: that
+    /// would cut the branch off from the tree, with no way to reach it again.
+    func move(folder: [String], into parent: [String]) async {
+        guard !FolderTree.isSelfOrDescendant(parent, of: folder),
+              parent != Array(folder.dropLast())
+        else { return }
+        let destination = parent + [folder[folder.count - 1]]
+        guard !allFolderPaths.contains(destination) else {
+            errorMessage = "There is already a folder called “\(destination.last ?? "")” there."
+            return
+        }
+        await rewriteFolder(from: folder, to: destination)
+    }
+
+    /// Renames a folder in place. Its descendants' paths move with it.
+    func renameFolder(_ folder: [String], to name: String) async {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != folder.last else { return }
+        let destination = Array(folder.dropLast()) + [trimmed]
+        guard !allFolderPaths.contains(destination) else {
+            errorMessage = "There is already a folder called “\(trimmed)” here."
+            return
+        }
+        await rewriteFolder(from: folder, to: destination)
+    }
+
+    /// The one write behind both renaming and moving: every path under `from`
+    /// is rewritten, on the requests and on the project's own list.
+    private func rewriteFolder(from: [String], to destination: [String]) async {
+        await run {
+            try await self.requests.moveFolder(
+                projectID: self.projectID, from: from, to: destination
+            )
+            let declared = (self.project?.folders ?? []).map {
+                FolderTree.rewriting($0, from: from, to: destination) ?? $0
+            }
+            _ = try await self.projects.setFolders(declared, for: self.projectID)
+            await self.reloadProjects()
+            await self.reloadRequests(projectID: self.projectID)
+        }
+    }
+
+    /// Deletes a folder and everything in it. Only ever reached from a
+    /// confirmed delete -- nothing else here removes a request the user did not
+    /// name.
+    func deleteFolder(_ folder: [String]) async {
+        await run {
+            try await self.requests.deleteFolder(projectID: self.projectID, folder: folder)
+            let declared = (self.project?.folders ?? []).filter {
+                !FolderTree.isSelfOrDescendant($0, of: folder)
+            }
+            _ = try await self.projects.setFolders(declared, for: self.projectID)
+            await self.reloadProjects()
+            await self.reloadRequests(projectID: self.projectID)
+            // The selected request may have been inside the folder.
+            if let requestID = self.selection?.requestID,
+               (self.requestsByProject[self.projectID] ?? [])
+                   .first(where: { $0.id == requestID }) == nil {
+                self.selection = .project(self.projectID)
+            }
+        }
+    }
+
     // MARK: - Filtering
 
     /// Narrows the sidebar to matching requests as it is typed. Held in memory
@@ -549,6 +710,20 @@ final class AppModel {
 
     /// The project a new request lands in: the window's, always.
     var targetProjectIDForNewRequest: String? { projectID }
+
+    /// The folder a new request lands in: the selected folder, or the folder of
+    /// the selected request, or the top level.
+    ///
+    /// Reading it off the selection rather than tracking a "current folder"
+    /// means there is only ever one answer to "where am I", and it is the one
+    /// the sidebar is already highlighting.
+    var targetFolderForNewRequest: [String] {
+        guard let selection else { return [] }
+        if let path = selection.folderPath { return path }
+        guard let requestID = selection.requestID else { return [] }
+        return (requestsByProject[projectID] ?? [])
+            .first { $0.id == requestID }?.folder ?? []
+    }
 
     private func run(_ work: () async throws -> Void) async {
         do {

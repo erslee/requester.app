@@ -42,6 +42,18 @@ nonisolated struct ProjectRepository: Sendable {
         try await update(projectID) { $0.globalHeaders = headers.filter { !$0.isBlank } }
     }
 
+    /// Replaces the folders the project remembers making. Only ones that are
+    /// empty need remembering -- a folder with requests in it is implied by
+    /// them -- but the whole list is kept, so a folder emptied by dragging its
+    /// last request out does not disappear under the pointer.
+    func setFolders(_ folders: [[String]], for projectID: String) async throws -> Project {
+        try await update(projectID) { project in
+            // Normalised: no duplicates, no empty path, stable order.
+            var seen: Set<[String]> = []
+            project.folders = folders.filter { !$0.isEmpty && seen.insert($0).inserted }
+        }
+    }
+
     /// Points the project at an OpenAPI document, or detaches it when given
     /// `nil`. Detaching leaves every request exactly as it is -- including the
     /// spec links on them, so re-attaching the same document reconciles with

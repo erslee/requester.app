@@ -307,6 +307,11 @@ final class LaunchState {
             try await variables.setMany(
                 projectID: project.id, writes: collection.variables, source: .manual
             )
+            // Folders the collection declared but left empty. The ones with
+            // requests in them are implied by those requests.
+            if !collection.folders.isEmpty {
+                _ = try await projects.setFolders(collection.folders, for: project.id)
+            }
 
             for imported in collection.requests {
                 var request = try await requests.create(projectID: project.id)

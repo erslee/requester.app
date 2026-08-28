@@ -25,10 +25,20 @@ struct SidebarView: View {
     @State private var renameTarget: RenameTarget?
     @State private var renameText = ""
     @State private var deleteTarget: SidebarSelection?
+    @State private var deleteFolderTarget: [String]?
     @FocusState private var isFilterFocused: Bool
 
     var body: some View {
-        list
+        // The reader is what brings a newly created request on screen;
+        // `scrollTo` needs the rows to carry ids, which mirror their tags.
+        ScrollViewReader { proxy in
+            list
+                .onChange(of: model.pendingScrollTarget) { _, target in
+                    guard let target else { return }
+                    withAnimation { proxy.scrollTo(target, anchor: .center) }
+                    model.pendingScrollTarget = nil
+                }
+        }
     }
 
     private var list: some View {
@@ -73,6 +83,21 @@ struct SidebarView: View {
             }
             Button("Cancel", role: .cancel) { deleteTarget = nil }
         }
+        .confirmationDialog(
+            "Delete this folder and every request in it?",
+            isPresented: .init(
+                get: { deleteFolderTarget != nil },
+                set: { if !$0 { deleteFolderTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                guard let folder = deleteFolderTarget else { return }
+                deleteFolderTarget = nil
+                Task { await model.deleteFolder(folder) }
+            }
+            Button("Cancel", role: .cancel) { deleteFolderTarget = nil }
+        }
     }
 
     // MARK: - Bottom bar
@@ -86,7 +111,8 @@ struct SidebarView: View {
             HStack(spacing: 8) {
                 Button {
                     guard let projectID = model.targetProjectIDForNewRequest else { return }
-                    Task { await model.createRequest(projectID: projectID) }
+                    let folder = model.targetFolderForNewRequest
+                    Task { await model.createRequest(projectID: projectID, folder: folder) }
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 13, weight: .medium))
@@ -157,18 +183,117 @@ struct SidebarView: View {
             .tag(projectTag)
             .id(projectTag)
             .contextMenu { projectMenu(project.id) }
+            // The project row is the drop target for "out of every folder".
+            .dropDestination(for: SidebarDrag.self) { items, _ in
+                drop(items, into: [])
+            }
 
         if model.isExpanded(project.id) {
-            ForEach(model.visibleRequests(in: project.id)) { request in
-                let requestTag = SidebarSelection.request(
-                    projectID: project.id, requestID: request.id
-                )
-                requestRow(request, in: project.id)
-                    .tag(requestTag)
-                    .id(requestTag)
-                    .contextMenu { requestMenu(projectID: project.id, requestID: request.id) }
+            // Depth is drawn with indentation rather than nested containers: a
+            // `List` with selection wants one flat sequence of rows, so the
+            // tree is walked in `FolderTree.flattened` before it gets here.
+            ForEach(model.sidebarRows) { row in
+                switch row {
+                case .folder(let node):
+                    let folderTag = SidebarSelection.folder(
+                        projectID: project.id, path: node.path
+                    )
+                    folderRow(node)
+                        .tag(folderTag)
+                        .id(folderTag)
+                case .request(let request, let depth):
+                    let tag = SidebarSelection.request(
+                        projectID: project.id, requestID: request.id
+                    )
+                    requestRow(request, in: project.id, depth: depth)
+                        .tag(tag)
+                        .id(tag)
+                        .contextMenu {
+                            requestMenu(projectID: project.id, requestID: request.id)
+                        }
+                        .draggable(SidebarDrag.request(request.id))
+                }
             }
         }
+    }
+
+    private func folderRow(_ node: FolderTree.Node) -> some View {
+        let isExpanded = model.isExpanded(folder: node.path)
+
+        return HStack(spacing: 4) {
+            // Only the triangle opens the folder; the row itself selects, the
+            // way Finder and Xcode behave. A row that did both would make a
+            // folder impossible to select without also opening or closing it.
+            Button {
+                model.toggleExpansion(folder: node.path)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .frame(width: 12)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isExpanded ? "Collapse \(node.name)" : "Expand \(node.name)")
+
+            // Filled and tinted, whatever the disclosure state -- the way
+            // Xcode's navigator draws them. The chevron beside it already says
+            // open or closed, so the icon swapping too was saying it twice.
+            Image(systemName: "folder.fill")
+                .foregroundStyle(.tint)
+
+            Text(node.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 2)
+        .padding(.leading, CGFloat(node.path.count - 1) * 14 + 20)
+        .contextMenu { folderMenu(node) }
+        .draggable(SidebarDrag.folder(node.path))
+        .dropDestination(for: SidebarDrag.self) { items, _ in
+            drop(items, into: node.path)
+        }
+    }
+
+    @ViewBuilder
+    private func folderMenu(_ node: FolderTree.Node) -> some View {
+        Button("New Request") {
+            Task { await model.createRequest(projectID: model.projectID, folder: node.path) }
+        }
+        Button("New Folder") {
+            Task { await model.createFolder(in: node.path) }
+        }
+        Divider()
+        Button("Rename Folder…") {
+            renameTarget = .folder(node.path)
+            renameText = node.name
+        }
+        Button("Delete Folder…", role: .destructive) {
+            deleteFolderTarget = node.path
+        }
+    }
+
+    /// Applies a drop, whatever was dragged. Returns whether anything was taken,
+    /// which is what tells the system to show the move as accepted.
+    private func drop(_ items: [SidebarDrag], into folder: [String]) -> Bool {
+        var accepted = false
+        for item in items {
+            switch item {
+            case .request(let requestID):
+                accepted = true
+                Task { await model.move(requestID: requestID, to: folder) }
+            case .folder(let path):
+                // Refused rather than silently ignored further down: a folder
+                // dropped into itself would take the branch out of the tree.
+                guard !FolderTree.isSelfOrDescendant(folder, of: path) else { continue }
+                accepted = true
+                Task { await model.move(folder: path, into: folder) }
+            }
+        }
+        return accepted
     }
 
     // MARK: - Rows
@@ -190,8 +315,10 @@ struct SidebarView: View {
                     ? "Collapse \(project.name)" : "Expand \(project.name)"
             )
 
-            Image(systemName: "folder")
-                .foregroundStyle(.secondary)
+            // The root reads as the root: same tint as its folders, a
+            // different glyph.
+            Image(systemName: "shippingbox.fill")
+                .foregroundStyle(.tint)
 
             Text(project.name)
                 .lineLimit(1)
@@ -200,7 +327,9 @@ struct SidebarView: View {
         .padding(.vertical, 2)
     }
 
-    private func requestRow(_ request: APIRequest, in projectID: String) -> some View {
+    private func requestRow(
+        _ request: APIRequest, in projectID: String, depth: Int = 0
+    ) -> some View {
         let isDirty = model.editor.isDirty && model.editor.draft?.id == request.id
         let isRemoved = request.spec?.isRemoved == true
 
@@ -229,7 +358,7 @@ struct SidebarView: View {
         .opacity(isRemoved ? 0.55 : 1)
         .help(isRemoved ? removedHelp(request) : "")
         .padding(.vertical, 2)
-        .padding(.leading, 20)
+        .padding(.leading, CGFloat(depth) * 14 + 20)
     }
 
     private func removedHelp(_ request: APIRequest) -> String {
@@ -252,6 +381,8 @@ struct SidebarView: View {
             Toggle("Show Removed Endpoints (\(removed))", isOn: $model.showsRemovedEndpoints)
         }
         Divider()
+        Button("New Folder") { Task { await model.createFolder() } }
+        Divider()
         Button("Rename Project…") { renameTarget = .project(projectID) }
         Button("Delete Project…", role: .destructive) {
             deleteTarget = .project(projectID)
@@ -272,7 +403,8 @@ struct SidebarView: View {
         switch deleteTarget {
         case .project: "Delete this project and all its requests and history?"
         case .request: "Delete this request?"
-        case nil: ""
+        // Folders are confirmed by their own dialog, which knows the path.
+        case .folder, nil: ""
         }
     }
 
@@ -282,6 +414,8 @@ struct SidebarView: View {
             await model.renameProject(projectID, to: newName)
         case .request(let projectID, let requestID):
             await model.renameRequest(projectID: projectID, requestID: requestID, to: newName)
+        case .folder(let path):
+            await model.renameFolder(path, to: newName)
         }
     }
 
@@ -291,6 +425,8 @@ struct SidebarView: View {
             await model.deleteProject(projectID)
         case .request(let projectID, let requestID):
             await model.deleteRequest(projectID: projectID, requestID: requestID)
+        case .folder(_, let path):
+            await model.deleteFolder(path)
         }
     }
 }
@@ -299,11 +435,32 @@ struct SidebarView: View {
 enum RenameTarget: Identifiable {
     case project(String)
     case request(projectID: String, requestID: String)
+    case folder([String])
 
     var id: String {
         switch self {
         case .project(let id): "project-\(id)"
         case .request(_, let requestID): "request-\(requestID)"
+        case .folder(let path): "folder-\(FolderTree.identifier(for: path))"
         }
     }
+}
+
+/// What a sidebar row carries while being dragged.
+///
+/// One type for both, so a folder and a request can be dropped on the same
+/// targets and the drop decides what to do with what it got.
+nonisolated enum SidebarDrag: Codable, Transferable {
+    case request(String)
+    case folder([String])
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .requesterSidebarRow)
+    }
+}
+
+nonisolated extension UTType {
+    /// Private to this app: a row dragged out of the sidebar means nothing
+    /// anywhere else, and a public type would invite other apps to accept it.
+    static let requesterSidebarRow = UTType(exportedAs: "dev.requester.sidebar-row")
 }

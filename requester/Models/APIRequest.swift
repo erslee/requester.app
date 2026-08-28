@@ -107,6 +107,23 @@ nonisolated struct APIRequest: Codable, Sendable, Hashable, Identifiable {
     /// existed from decoding.
     var spec: SpecLink?
 
+    /// The folder this request sits in, outermost first -- `["Users", "Admin"]`
+    /// is `Users ▸ Admin`. Empty means the project's top level.
+    ///
+    /// A path rather than a folder id: a folder has no existence beyond the
+    /// requests in it and the project's list of ones made by hand, so there is
+    /// nothing for an id to point at. Optional for the same reason as `spec`
+    /// above -- a non-optional field would stop every request file written
+    /// before this existed from decoding.
+    var folderPath: [String]?
+
+    /// The folder as the rest of the app wants it: `nil` and `[]` both mean
+    /// the top level.
+    var folder: [String] {
+        get { folderPath ?? [] }
+        set { folderPath = newValue.isEmpty ? nil : newValue }
+    }
+
     var order: Int = 0
     var createdAt: Date
     var updatedAt: Date

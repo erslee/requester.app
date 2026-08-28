@@ -108,6 +108,9 @@ struct ContentView: View {
         case .project(let projectID):
             ProjectDetailView(model: model, projectID: projectID)
 
+        case .folder(_, let path):
+            FolderDetailView(model: model, path: path)
+
         case .request:
             ResizableSplit(
                 axis: .vertical, minimumFirst: 240, minimumSecond: 200

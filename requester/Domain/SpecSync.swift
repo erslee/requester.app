@@ -12,6 +12,9 @@ import Foundation
 /// never touched once the request exists. The body is the single exception, and
 /// the reason `SpecLink.generatedBody` is stored -- see `merged`.
 nonisolated enum SpecSync {
+    /// What separated a tag from an operation name before folders existed.
+    private static let legacyFolderSeparator = " / "
+
     struct Plan: Sendable {
         /// New operations, in document order, ready to be written.
         var added: [OpenAPISpec.Operation] = []
@@ -114,8 +117,25 @@ nonisolated enum SpecSync {
             spec: operation.request.headers, current: current.headers
         )
 
-        // User-owned: name, auth, postResponseScript, scriptTimeoutSeconds and
-        // order are deliberately absent from this function.
+        // User-owned: name, folder, auth, postResponseScript,
+        // scriptTimeoutSeconds and order are deliberately absent from this
+        // function. The document's tag places a request when it is first
+        // created and never moves it again -- where the user filed something is
+        // theirs, exactly like what they named it.
+        //
+        // The one exception is the shape this app wrote before it had folders,
+        // where the tag was glued onto the name as "Users / listUsers". That is
+        // unfolded here: only when the request is still in no folder *and* its
+        // name is exactly the prefix this document's tag would have produced,
+        // so a request the user has since renamed or filed is left alone.
+        if result.folder.isEmpty,
+           let tag = operation.request.folder.first,
+           current.name.hasPrefix(tag + Self.legacyFolderSeparator) {
+            result.folder = operation.request.folder
+            result.name = String(
+                current.name.dropFirst(tag.count + Self.legacyFolderSeparator.count)
+            )
+        }
 
         let isUntouched = current.rawBody == (current.spec?.generatedBody ?? "")
 
