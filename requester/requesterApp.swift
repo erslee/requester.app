@@ -132,6 +132,10 @@ private struct ProjectWindow: View {
             }
         }
         .task(id: projectID) { model = await launch.model(for: projectID) }
+        // Registered while the window is up, so the launcher can refuse to
+        // delete a project out from under a window that is showing it.
+        .onAppear { if let projectID { launch.windowOpened(projectID) } }
+        .onDisappear { if let projectID { launch.windowClosed(projectID) } }
     }
 }
 
@@ -195,6 +199,10 @@ final class LaunchState {
 
     /// Surfaced as an alert on the launcher.
     var errorMessage: String?
+
+    /// Projects that currently have a window. Deleting one of these is refused
+    /// rather than leaving a window showing data that is no longer there.
+    private(set) var openProjectIDs: Set<String> = []
 
     var isUsingDefaultFolder: Bool { roots.isUsingDefaultRoot }
 
@@ -266,6 +274,32 @@ final class LaunchState {
 
         recents.markOpened(projectID)
         return AppModel(storage: storage, projectID: projectID)
+    }
+
+    func windowOpened(_ projectID: String) {
+        openProjectIDs.insert(projectID)
+    }
+
+    func windowClosed(_ projectID: String) {
+        openProjectIDs.remove(projectID)
+    }
+
+    /// Deletes a project and everything remembered about it: its requests,
+    /// history and variables on disk, its place in the recents list, and the
+    /// sidebar state stored against it.
+    ///
+    /// Refused while its window is open -- the window would carry on showing a
+    /// project that no longer exists, and saving from it would write the files
+    /// back.
+    func deleteProject(_ projectID: String) async {
+        guard let storage, !openProjectIDs.contains(projectID) else { return }
+        do {
+            try await ProjectRepository(storage: storage).delete(projectID)
+            recents.forget(projectID)
+            InterfaceStateStore(projectID: projectID).forgetProject()
+        } catch {
+            errorMessage = Self.describe(error)
+        }
     }
 
     /// Creates a project and hands back its id, for the caller to open a window

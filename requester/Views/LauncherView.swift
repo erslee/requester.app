@@ -12,6 +12,11 @@ struct LauncherView: View {
     @State private var projects: [Project] = []
     @State private var showsAllProjects = false
 
+    /// The row the pointer is over, so the trash appears where it is useful
+    /// rather than sitting on every row as a standing invitation.
+    @State private var hoveredProjectID: String?
+    @State private var deleteTarget: Project?
+
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
 
@@ -41,6 +46,25 @@ struct LauncherView: View {
         }
         .sheet(item: $launch.importSummary) { summary in
             ImportSummaryView(summary: summary)
+        }
+        .confirmationDialog(
+            deleteTarget.map { "Delete “\($0.name)”?" } ?? "",
+            isPresented: .init(
+                get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: deleteTarget
+        ) { project in
+            Button("Delete", role: .destructive) {
+                deleteTarget = nil
+                Task {
+                    await launch.deleteProject(project.id)
+                    await reload()
+                }
+            }
+            Button("Cancel", role: .cancel) { deleteTarget = nil }
+        } message: { _ in
+            Text("Its requests, history, and variables will be deleted. This cannot be undone.")
         }
         .alert(
             "Something went wrong",
@@ -128,27 +152,48 @@ struct LauncherView: View {
     }
 
     private func row(for project: Project) -> some View {
-        Button {
-            open(project.id)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "folder")
-                    .foregroundStyle(.secondary)
-                Text(project.name)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+        let isOpen = launch.openProjectIDs.contains(project.id)
+
+        return HStack(spacing: 8) {
+            Button {
+                open(project.id)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "shippingbox.fill")
+                        .foregroundStyle(.tint)
+                    Text(project.name)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .buttonStyle(.plain)
+
+            Button {
+                deleteTarget = project
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            // Deleting a project whose window is up would leave that window
+            // showing something that is gone, and a save from it would write
+            // the files back.
+            .disabled(isOpen)
+            .help(isOpen ? "Close its window before deleting it" : "Delete this project")
+            .opacity(hoveredProjectID == project.id ? 1 : 0)
+            .accessibilityLabel("Delete \(project.name)")
+
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
         .background(.quinary, in: RoundedRectangle(cornerRadius: 6))
         .padding(.vertical, 1)
+        .onHover { hoveredProjectID = $0 ? project.id : nil }
     }
 
     private var actions: some View {
