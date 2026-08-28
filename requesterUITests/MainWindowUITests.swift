@@ -69,6 +69,14 @@ final class MainWindowUITests: XCTestCase {
             window.waitForExistence(timeout: 15),
             "A new project did not open its own window, titled with its name."
         )
+        // The launcher closes itself once it has opened something. Waiting for
+        // that is not politeness: until it goes it can sit over the project
+        // window's bottom-left corner, where the new-request button lives, and
+        // an obscured element is not hittable.
+        XCTAssertTrue(
+            launcher.waitForNonExistence(timeout: 10),
+            "The launcher stayed open after opening a project."
+        )
 
         // Assert -- the project's own pane is what a new window lands on
         let newKey = window.textFields["New key"]
@@ -99,7 +107,7 @@ final class MainWindowUITests: XCTestCase {
         // Hittability matters on its own: if the window is too narrow for all
         // three columns, the split view overflows and the sidebar lands outside
         // the window, where it exists and is enabled but cannot be clicked.
-        XCTAssertTrue(requestButton.isHittable, "The sidebar toolbar is outside the window.")
+        XCTAssertTrue(requestButton.isHittable, "The sidebar's bottom bar is outside the window.")
         requestButton.click()
         let urlField = window.textFields["https://example.com/path?query=value"]
         XCTAssertTrue(urlField.waitForExistence(timeout: 8), "The request editor did not open.")
@@ -130,6 +138,7 @@ final class MainWindowUITests: XCTestCase {
 
         let window = projectWindow("Untitled Project")
         XCTAssertTrue(window.waitForExistence(timeout: 15))
+        XCTAssertTrue(launcher.waitForNonExistence(timeout: 10))
         let windowCount = app.windows.count
 
         // Act -- back to the launcher and open the same project again
