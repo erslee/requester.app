@@ -1,14 +1,22 @@
 import SwiftUI
 
-/// Shown when a project rather than a request is selected: its name, plus the
-/// project's variables, usable as `{{name}}` in any request inside it.
+/// Shown when a project rather than a request is selected: its name, the
+/// headers every request in it inherits, and its variables, usable as
+/// `{{name}}` in any request inside it.
 struct ProjectDetailView: View {
     @Bindable var model: AppModel
     let projectID: String
 
     @State private var name = ""
-    @State private var newKey = ""
-    @State private var newValue = ""
+    @State private var globalHeaders: [KeyValueItem] = []
+
+    /// The last rows written to disk, so "has this changed?" is a comparison
+    /// rather than a flag to clear by hand -- the shape `EditorModel` uses for
+    /// a request draft, for the same reason.
+    @State private var savedHeaders: [KeyValueItem] = []
+    @State private var saveTask: Task<Void, Never>?
+
+    private static let autosaveDelay = Duration.milliseconds(700)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -18,6 +26,8 @@ struct ProjectDetailView: View {
                 .onSubmit(commitName)
 
             SpecSectionView(model: model, projectID: projectID)
+
+            globalHeadersSection
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("VARIABLES — use as {{name}} in any request in this project")
@@ -31,9 +41,73 @@ struct ProjectDetailView: View {
         .task(id: projectID) { await load() }
     }
 
+    private var globalHeadersSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("GLOBAL HEADERS — sent with every request in this project")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            KeyValueTableView(
+                items: $globalHeaders,
+                knownVariableNames: Set(model.variables(forProject: projectID).map(\.key))
+            )
+            // A definite height, not a flexible one: the variables table below
+            // has a scroll view of its own and will take every point it is
+            // offered, and a compressible frame here loses the blank row the
+            // table keeps for adding an entry -- leaving no way to add one.
+            .frame(height: tableHeight)
+            .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
+
+            Text("A request that sets the same header wins. Switch a header off "
+                 + "in a request to send it without that header.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .onChange(of: globalHeaders) { scheduleSave() }
+    }
+
+    /// Grows with the rows, up to a point, then the table scrolls inside
+    /// itself. The constant covers the column header and the Add row.
+    private var tableHeight: CGFloat {
+        let rows = min(max(globalHeaders.count, 1), 5)
+        return 58 + CGFloat(rows) * 30
+    }
+
     private func load() async {
-        name = model.projectList.first { $0.id == projectID }?.name ?? ""
+        let project = model.projectList.first { $0.id == projectID }
+        // One read for both, so the baseline and the editable copy share row
+        // identities and compare cleanly.
+        let stored = project?.globalHeaders ?? []
+        name = project?.name ?? ""
+        // The blank row to type into is seeded here rather than left to the
+        // table's own `onAppear`: this assignment lands in the same update as
+        // that one, so SwiftUI sees no net change, the table's `onChange`
+        // never fires, and its row would never come back -- an empty table
+        // with no way to add anything.
+        globalHeaders = stored + [KeyValueItem()]
+        savedHeaders = stored
         await model.reloadVariables(projectID: projectID)
+    }
+
+    /// Autosaves like the request editor does: debounced, because the table
+    /// reports every keystroke and each save also reloads the project list.
+    ///
+    /// The rows and the project are captured now rather than read when the task
+    /// fires, so a pending save is never redirected at whatever is on screen by
+    /// the time it lands.
+    private func scheduleSave() {
+        let edited = globalHeaders.filter { !$0.isBlank }
+        // The table adds its blank row on appear; that alone is not an edit.
+        guard edited != savedHeaders else { return }
+
+        let target = projectID
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(for: Self.autosaveDelay)
+            guard !Task.isCancelled else { return }
+            await model.setProjectHeaders(edited, for: target)
+            savedHeaders = edited
+        }
     }
 
     /// A blank name reverts rather than being accepted, so a project can never

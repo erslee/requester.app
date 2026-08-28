@@ -249,6 +249,12 @@ struct OpenAPISpecTests {
         #expect(request.bodyMode == .form)
         #expect(request.formFields.map(\.key) == ["file", "note"])
         #expect(request.formFields.first { $0.key == "file" }?.enabled == true)
+        // No $ref was involved, so nothing should be reported about one. This
+        // caught an empty string being handed to the dereferencer, which put
+        // "points outside this document" on every inline form schema. Scoped to
+        // reference warnings on purpose: this fixture declares no server, which
+        // is a real and separate warning.
+        #expect(!document.warnings.contains { $0.contains("points outside") })
     }
 
     // MARK: - Rejections

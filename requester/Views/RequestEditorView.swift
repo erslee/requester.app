@@ -115,8 +115,10 @@ struct RequestEditorView: View {
                         items: draft.params, knownVariableNames: editor.knownVariableNames
                     )
                 case .headers:
-                    KeyValueTableView(
-                        items: draft.headers, knownVariableNames: editor.knownVariableNames
+                    HeadersTabView(
+                        headers: draft.headers,
+                        globalHeaders: globalHeaders(of: draft.wrappedValue),
+                        knownVariableNames: editor.knownVariableNames
                     )
                 case .body:
                     BodyTabView(draft: draft, knownVariableNames: editor.knownVariableNames)
@@ -129,6 +131,13 @@ struct RequestEditorView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.top, 8)
         }
+    }
+
+    /// What this request inherits from its project. Read straight off the
+    /// project list rather than copied into the draft -- they are the
+    /// project's headers, and a request must not carry a stale copy of them.
+    private func globalHeaders(of draft: APIRequest) -> [KeyValueItem] {
+        model.projectList.first { $0.id == draft.projectID }?.globalHeaders ?? []
     }
 
     /// Counts on the tab label, so a request's shape is visible without

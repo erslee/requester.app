@@ -13,6 +13,14 @@ nonisolated struct Project: Codable, Sendable, Hashable, Identifiable {
     /// loading. An optional decodes through `decodeIfPresent` and arrives nil.
     var specSource: SpecSource?
 
+    /// Headers sent with every request in this project, unless the request
+    /// states its own value for that name. See `HeaderMerge` for the rule.
+    ///
+    /// Optional for the same reason as `specSource` above: a non-optional
+    /// field would stop every `project.json` written before this existed from
+    /// loading. `nil` and `[]` mean the same thing -- no global headers.
+    var globalHeaders: [KeyValueItem]?
+
     var createdAt: Date
     var updatedAt: Date
 

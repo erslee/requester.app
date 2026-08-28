@@ -13,6 +13,12 @@ Built with SwiftUI and Swift 6 strict concurrency. **No third-party dependencies
 API key), and a post-response script, per request. Method, URL, and everything else
 autosave shortly after you stop typing.
 
+**Global headers** — Headers set once on a project and sent with every request in it.
+A request that sets the same header wins, whatever the casing; switching a header off in
+a request sends it without that header at all. The request's Headers tab lists what it
+inherits underneath its own, with overridden ones struck through. Global headers take
+`{{variables}}` like any other field, and the requests themselves keep no copy of them.
+
 **Variables** — Project-scoped `{{name}}` placeholders, substituted at send time into
 the URL, params, headers, body, GraphQL query, and auth fields. Fields tint green when
 every placeholder in them resolves and red when one doesn't, so a typo is visible
@@ -103,7 +109,7 @@ security-scoped bookmark. **Use Default Data Folder** goes back.
 Everything is plain files:
 
 ```
-projects/<projectID>/project.json              project metadata
+projects/<projectID>/project.json              project metadata + global headers
 projects/<projectID>/requests/<requestID>.json  one file per request
 variables/<projectID>.json                      project variables
 history/<projectID>/YYYY-MM.jsonl               append-only, one line per send

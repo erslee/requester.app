@@ -30,13 +30,16 @@ nonisolated struct ProjectRepository: Sendable {
     }
 
     func rename(_ projectID: String, to name: String) async throws -> Project {
-        guard var project = try await get(projectID) else {
-            throw StorageError.notFound("project \(projectID)")
-        }
-        project.name = name
-        project.updatedAt = Date()
-        try await storage.writeModel(project, to: path(for: projectID))
-        return project
+        try await update(projectID) { $0.name = name }
+    }
+
+    /// Replaces the headers every request in the project inherits. Blank rows
+    /// are dropped here, so the editor's trailing placeholder row never
+    /// reaches disk -- the same treatment `APIRequest.normalized` gives.
+    func setGlobalHeaders(
+        _ headers: [KeyValueItem], for projectID: String
+    ) async throws -> Project {
+        try await update(projectID) { $0.globalHeaders = headers.filter { !$0.isBlank } }
     }
 
     /// Points the project at an OpenAPI document, or detaches it when given
@@ -44,10 +47,17 @@ nonisolated struct ProjectRepository: Sendable {
     /// spec links on them, so re-attaching the same document reconciles with
     /// what is already there instead of duplicating it.
     func setSpecSource(_ source: SpecSource?, for projectID: String) async throws -> Project {
+        try await update(projectID) { $0.specSource = source }
+    }
+
+    /// Read, change, stamp, write back -- the shape every edit above shares.
+    private func update(
+        _ projectID: String, _ change: (inout Project) -> Void
+    ) async throws -> Project {
         guard var project = try await get(projectID) else {
             throw StorageError.notFound("project \(projectID)")
         }
-        project.specSource = source
+        change(&project)
         project.updatedAt = Date()
         try await storage.writeModel(project, to: path(for: projectID))
         return project

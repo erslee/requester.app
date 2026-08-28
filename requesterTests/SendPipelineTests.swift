@@ -67,6 +67,7 @@ struct SendPipelineTests {
             executor: HTTPExecutor(session: StubURLProtocol.session()),
             history: history,
             variables: variables,
+            projects: ProjectRepository(storage: storage),
             scripts: ScriptRunner()
         )
 
@@ -109,6 +110,60 @@ struct SendPipelineTests {
         #expect(await storage.exists(at: "history/\(project.id)/\(monthKey).jsonl"))
     }
 
+    /// Global headers live on the project, so the request keeps its own copy
+    /// free of them -- but what goes over the wire has them merged in.
+    @Test func inheritsProjectHeadersUnlessTheRequestOverridesThem() async throws {
+        // Arrange -- three global headers, one of which the request names itself
+        let (storage, root) = try makeStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        StubURLProtocol.stub = .init()
+
+        let projects = ProjectRepository(storage: storage)
+        let variables = VariableRepository(storage: storage)
+        let requests = RequestRepository(storage: storage)
+        let service = HistoryService(
+            executor: HTTPExecutor(session: StubURLProtocol.session()),
+            history: HistoryRepository(storage: storage),
+            variables: variables,
+            projects: projects,
+            scripts: ScriptRunner()
+        )
+
+        let project = try await projects.create(name: "Test")
+        try await variables.setOne(projectID: project.id, key: "key", value: "sekret")
+        _ = try await projects.setGlobalHeaders(
+            [
+                KeyValueItem(key: "X-Api-Key", value: "{{key}}"),
+                KeyValueItem(key: "Accept", value: "application/json"),
+                KeyValueItem(key: "X-Off", value: "no", enabled: false),
+            ],
+            for: project.id
+        )
+
+        var request = try await requests.create(projectID: project.id, name: "List")
+        request.url = "https://example.com/items"
+        request.headers = [KeyValueItem(key: "accept", value: "text/csv")]
+        request = try await requests.save(request)
+
+        // Act
+        let entry = try await service.sendAndRecord(request)
+
+        // Assert -- inherited, with its {{variable}} resolved like any other field
+        let sent = StubURLProtocol.lastRequest
+        #expect(sent?.value(forHTTPHeaderField: "X-Api-Key") == "sekret")
+        // Assert -- the request's own value wins, whatever the casing
+        #expect(sent?.value(forHTTPHeaderField: "Accept") == "text/csv")
+        // Assert -- a switched-off global header is never sent
+        #expect(sent?.value(forHTTPHeaderField: "X-Off") == nil)
+
+        // Assert -- neither the snapshot nor the saved request grew a copy of
+        // the project's headers
+        #expect(entry.requestSnapshot.headers.map(\.key) == ["accept"])
+        let saved = try await requests.get(projectID: project.id, requestID: request.id)
+        #expect(saved?.headers.map(\.key) == ["accept"])
+    }
+
     @Test func recordsAFailedSendWithAnErrorInsteadOfLosingIt() async throws {
         // Arrange -- a URL that cannot be built at all
         let (storage, root) = try makeStorage()
@@ -119,6 +174,7 @@ struct SendPipelineTests {
             executor: HTTPExecutor(session: StubURLProtocol.session()),
             history: history,
             variables: VariableRepository(storage: storage),
+            projects: ProjectRepository(storage: storage),
             scripts: ScriptRunner()
         )
 
@@ -147,6 +203,7 @@ struct SendPipelineTests {
             executor: HTTPExecutor(session: StubURLProtocol.session()),
             history: history,
             variables: variables,
+            projects: ProjectRepository(storage: storage),
             scripts: ScriptRunner()
         )
 
@@ -178,6 +235,7 @@ struct SendPipelineTests {
             executor: HTTPExecutor(session: StubURLProtocol.session()),
             history: history,
             variables: VariableRepository(storage: storage),
+            projects: ProjectRepository(storage: storage),
             scripts: ScriptRunner()
         )
 
@@ -213,6 +271,7 @@ struct SendPipelineTests {
             executor: HTTPExecutor(session: StubURLProtocol.session()),
             history: history,
             variables: VariableRepository(storage: storage),
+            projects: ProjectRepository(storage: storage),
             scripts: ScriptRunner()
         )
 

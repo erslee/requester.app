@@ -307,11 +307,20 @@ nonisolated enum OpenAPISpec {
         _ media: Any?, to request: inout APIRequest, root: [String: Any], warnings: inout [String]
     ) {
         request.bodyMode = .form
-        let schema = (media as? [String: Any])?["schema"]
-        guard let resolved = OpenAPISchemaExample.dereference(
-            (schema as? [String: Any])?["$ref"] as? String ?? "",
-            in: root, warnings: &warnings
-        ) ?? schema as? [String: Any] else { return }
+        guard let schema = (media as? [String: Any])?["schema"] as? [String: Any] else { return }
+
+        // Only dereference when there is actually a reference. Handing an empty
+        // string to `dereference` reports it as pointing outside the document,
+        // which put a bogus warning on every inline form schema.
+        let resolved: [String: Any]
+        if let reference = schema["$ref"] as? String {
+            guard let target = OpenAPISchemaExample.dereference(
+                reference, in: root, warnings: &warnings
+            ) else { return }
+            resolved = target
+        } else {
+            resolved = schema
+        }
 
         let required = Set((resolved["required"] as? [String]) ?? [])
         for key in ((resolved["properties"] as? [String: Any]) ?? [:]).keys.sorted() {

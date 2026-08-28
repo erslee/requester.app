@@ -118,7 +118,20 @@ nonisolated enum SpecSync {
         // order are deliberately absent from this function.
 
         let isUntouched = current.rawBody == (current.spec?.generatedBody ?? "")
-        if isUntouched, current.bodyMode != .form {
+
+        if operation.request.bodyMode == .form {
+            // A form body has no generated text to compare against, so the
+            // "untouched?" test above cannot speak for it. Its fields are
+            // reconciled the way parameters are instead: the spec decides which
+            // fields exist, the user keeps whatever they typed into them.
+            // Excluding form bodies from the sync altogether -- as this first
+            // did -- froze their fields forever, so a field added to the
+            // document never reached the request.
+            result.bodyMode = .form
+            result.formFields = reconciled(
+                spec: operation.request.formFields, current: current.formFields
+            )
+        } else if isUntouched {
             result.bodyMode = operation.request.bodyMode
             result.rawBody = operation.request.rawBody
             result.rawBodyType = operation.request.rawBodyType
@@ -133,6 +146,28 @@ nonisolated enum SpecSync {
             generatedBody: isUntouched ? operation.generatedBody : (current.spec?.generatedBody ?? "")
         )
         return result
+    }
+
+    /// Merges the form-field table, on the same principle as the parameter one.
+    private static func reconciled(
+        spec: [FormField], current: [FormField]
+    ) -> [FormField] {
+        let currentByKey = Dictionary(
+            current.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+
+        return spec.map { field in
+            guard let existing = currentByKey[field.key] else { return field }
+            var merged = field
+            merged.value = existing.value
+            merged.enabled = existing.enabled
+            // A file the user attached is theirs, and the spec has no opinion
+            // about which file it should be.
+            merged.isFile = existing.isFile
+            merged.filePath = existing.filePath
+            merged.contentType = existing.contentType
+            return merged
+        }
     }
 
     /// Merges one parameter table.

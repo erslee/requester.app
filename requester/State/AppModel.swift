@@ -84,6 +84,7 @@ final class AppModel {
                 executor: HTTPExecutor(),
                 history: history,
                 variables: variables,
+                projects: projects,
                 scripts: ScriptRunner()
             )
         )
@@ -508,6 +509,16 @@ final class AppModel {
                 localized.recoverySuggestion]
             .compactMap(\.self)
             .joined(separator: " ")
+    }
+
+    // MARK: - Global headers
+
+    /// Replaces the headers every request in the project inherits.
+    func setProjectHeaders(_ headers: [KeyValueItem], for projectID: String) async {
+        await run {
+            _ = try await self.projects.setGlobalHeaders(headers, for: projectID)
+            await self.reloadProjects()
+        }
     }
 
     // MARK: - Variables

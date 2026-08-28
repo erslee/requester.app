@@ -1,7 +1,8 @@
 import Foundation
 
-/// Orchestrates one send: resolve `{{variables}}`, send, persist history
-/// unconditionally, run the post-response script, persist what it wrote.
+/// Orchestrates one send: inherit the project's global headers, resolve
+/// `{{variables}}`, send, persist history unconditionally, run the
+/// post-response script, persist what it wrote.
 ///
 /// A failed send (bad URL, connection error, timeout) still produces a history
 /// record -- it simply has no `response` and carries an `error` instead. A
@@ -12,18 +13,27 @@ nonisolated struct HistoryService: Sendable {
     let executor: HTTPExecutor
     let history: HistoryRepository
     let variables: VariableRepository
+    let projects: ProjectRepository
     let scripts: ScriptRunner
 
     func sendAndRecord(_ request: APIRequest) async throws -> HistoryEntry {
         let sentAt = Date()
+        // Global headers are merged in before resolution, so a `{{variable}}`
+        // in one is substituted exactly as it would be in the request's own.
+        let project = try await projects.get(request.projectID)
+        let merged = HeaderMerge.apply(project?.globalHeaders ?? [], to: request)
         let variableValues = try await variables.values(projectID: request.projectID)
-        let resolved = VariableResolver.resolve(request, with: variableValues)
+        let resolved = VariableResolver.resolve(merged, with: variableValues)
 
         func newEntry() -> HistoryEntry {
             HistoryEntry(
                 id: ProjectRepository.newIdentifier(),
                 projectID: request.projectID,
                 requestID: request.id.isEmpty ? nil : request.id,
+                // The snapshot is the request as authored -- without the
+                // project's headers folded in, which belong to the project and
+                // may since have changed. What actually went over the wire is
+                // recorded separately, in `requestHeadersSent`.
                 requestSnapshot: request,
                 resolvedURL: resolved.url,
                 sentAt: sentAt

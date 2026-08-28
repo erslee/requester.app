@@ -207,6 +207,30 @@ struct SpecSyncTests {
         #expect(updated.params[1].value == "available", "a new row arrives as the spec describes it")
     }
 
+    /// Form fields used to be excluded from the merge entirely to protect what
+    /// the user had typed, which froze them: a field added to the document never
+    /// reached the request. They reconcile like parameters now.
+    @Test func formFieldsFollowTheSpecWhileKeepingWhatWasTypedIn() {
+        // Arrange
+        func formOperation(_ keys: [String]) -> OpenAPISpec.Operation {
+            var request = APIRequest(id: "", projectID: "")
+            request.bodyMode = .form
+            request.formFields = keys.map { FormField(key: $0) }
+            return OpenAPISpec.Operation(key: "operationId:upload", request: request, generatedBody: "")
+        }
+        var existing = imported(formOperation(["note", "old"]))
+        existing.formFields[0].value = "hello"
+        existing.formFields[0].enabled = true
+
+        // Act -- the document drops "old" and adds "title"
+        let merged = SpecSync.merged(formOperation(["note", "title"]), into: existing)
+
+        // Assert
+        #expect(merged.formFields.map(\.key) == ["note", "title"])
+        #expect(merged.formFields[0].value == "hello", "what the user typed survives")
+        #expect(merged.formFields[0].enabled == true)
+    }
+
     // MARK: - Removal and restoration
 
     @Test func anOperationGoneFromTheSpecIsTombstonedNotDeleted() {
