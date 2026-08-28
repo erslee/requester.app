@@ -1,46 +1,52 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import requester
 
 /// An in-memory `StorageBackend`, so repository behaviour can be tested
 /// without touching the filesystem or a real data folder.
-actor InMemoryStorage: StorageBackend {
-    private var files: [String: String] = [:]
+///
+/// A mutex-guarded final class rather than an actor, matching how
+/// `HTTPExecutor` guards its captured metrics. `StorageBackend` is a
+/// `nonisolated protocol`, and an actor conforming to one has `nonisolated`
+/// propagated onto its synchronous initializer -- which is not valid, and
+/// which the test target's isolation settings make a hard error. A lock has
+/// no isolation to infer, and serialises access just as an actor would.
+final class InMemoryStorage: StorageBackend {
+    private let files = Mutex<[String: String]>([:])
 
-    /// Spelled out rather than left to the compiler. `StorageBackend` is a
-    /// `nonisolated protocol`, and the default initializer synthesized for an
-    /// actor is itself implicitly `nonisolated` -- conforming one to the other
-    /// asks the compiler to apply `nonisolated` to an actor's synchronous
-    /// initializer, which is not a thing. `LocalFileStorage` never hit this
-    /// only because it declares an `init(root:)` of its own.
     init() {}
 
-    func readText(at path: String) -> String? { files[path] }
+    func readText(at path: String) -> String? { files.withLock { $0[path] } }
 
-    func writeText(_ text: String, to path: String) { files[path] = text }
+    func writeText(_ text: String, to path: String) { files.withLock { $0[path] = text } }
 
     func appendLine(_ line: String, to path: String) {
-        files[path, default: ""] += line.trimmingCharacters(in: .newlines) + "\n"
+        files.withLock { $0[path, default: ""] += line.trimmingCharacters(in: .newlines) + "\n" }
     }
 
     func listDirectory(at path: String) -> [String] {
         let prefix = path.hasSuffix("/") ? path : path + "/"
-        return Set(
-            files.keys
-                .filter { $0.hasPrefix(prefix) }
-                .compactMap { $0.dropFirst(prefix.count).split(separator: "/").first }
-                .map(String.init)
-        ).sorted()
+        return files.withLock { files in
+            Set(
+                files.keys
+                    .filter { $0.hasPrefix(prefix) }
+                    .compactMap { $0.dropFirst(prefix.count).split(separator: "/").first }
+                    .map(String.init)
+            ).sorted()
+        }
     }
 
-    func exists(at path: String) -> Bool { files[path] != nil }
+    func exists(at path: String) -> Bool { files.withLock { $0[path] != nil } }
 
-    func delete(at path: String) { files[path] = nil }
+    func delete(at path: String) { files.withLock { $0[path] = nil } }
 
     func deleteTree(at path: String) {
         let prefix = path.hasSuffix("/") ? path : path + "/"
-        for key in files.keys where key == path || key.hasPrefix(prefix) {
-            files[key] = nil
+        files.withLock { files in
+            for key in files.keys where key == path || key.hasPrefix(prefix) {
+                files[key] = nil
+            }
         }
     }
 }
