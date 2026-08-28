@@ -34,6 +34,11 @@ final class MenuCommandsUITests: XCTestCase {
         XCTAssertTrue(importItem.waitForExistence(timeout: 5), "Import Collection is missing.")
         XCTAssertTrue(importItem.isEnabled, "Import Collection should be usable.")
 
+        // Assert -- making and opening projects moved here from the sidebar
+        XCTAssertTrue(app.menuItems["New Project"].exists, "New Project is missing.")
+        XCTAssertTrue(app.menuItems["New Project"].isEnabled)
+        XCTAssertTrue(app.menuItems["Open Project…"].exists, "Open Project is missing.")
+
         // Assert -- the data-folder commands are still there, below it
         XCTAssertTrue(app.menuItems["Reveal Data Folder in Finder"].exists)
         XCTAssertTrue(app.menuItems["Change Data Folder…"].exists)

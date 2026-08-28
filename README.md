@@ -9,9 +9,21 @@ Built with SwiftUI and Swift 6 strict concurrency. **No third-party dependencies
 
 ## Features
 
+**One project per window** — The app opens on a launcher listing the projects you
+opened most recently, with the rest behind *All Projects*. Picking one opens it in its
+own window, titled with the project's name; asking for the same project again focuses
+the window it is already in rather than opening a second. **⌘N** makes a new project in
+a new window, **⌘O** brings the launcher back.
+
 **Requests** — Params, Headers, Body (raw / form / GraphQL), Auth (basic, bearer,
 API key), and a post-response script, per request. Method, URL, and everything else
 autosave shortly after you stop typing.
+
+**Filter** — A filter field sits at the bottom of the sidebar, next to the new-request
+button. Typing narrows the list to requests whose name, URL, or method match; Escape
+clears it, **⇧⌘F** puts the cursor in it. The request you have open stays listed even
+when it does not match, so the editor is never left pointing at a row that isn't there.
+(**⌘F** stays find-in-response-body.)
 
 **Global headers** — Headers set once on a project and sent with every request in it.
 A request that sets the same header wins, whatever the casing; switching a header off in

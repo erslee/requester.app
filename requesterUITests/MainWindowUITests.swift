@@ -1,14 +1,17 @@
 import XCTest
 
-/// Exercises the real UI against a throwaway data folder: create a project, add
-/// a variable, create a request, and check the editor's tabs and highlighting
-/// all render and respond.
+/// Exercises the real UI against a throwaway data folder: make a project from
+/// the launcher, add a variable, create a request, and check the editor's tabs
+/// and highlighting all render and respond.
 final class MainWindowUITests: XCTestCase {
     private var app: XCUIApplication!
 
-    /// Queries are scoped to the window: a bare `app.buttons[…]` can match a
-    /// Touch Bar proxy instead of the real control.
-    private var window: XCUIElement { app.windows.firstMatch }
+    /// The launcher, by title -- with a project window open too, a bare
+    /// `app.windows.firstMatch` is ambiguous.
+    private var launcher: XCUIElement { app.windows["Requester"] }
+
+    /// The project window, named after the project it holds.
+    private func projectWindow(_ name: String) -> XCUIElement { app.windows[name] }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -34,34 +37,33 @@ final class MainWindowUITests: XCTestCase {
 
     @MainActor
     func testCreatesAProjectAndRequestAndEditsIt() throws {
-        // Assert -- an empty folder lands on the main window, not the picker.
+        // Assert -- an empty folder lands on the launcher, not a picker.
         // A cold Debug launch can be slow, hence the generous wait.
+        let newProject = launcher.buttons["New Project"]
+        XCTAssertTrue(newProject.waitForExistence(timeout: 45), "The launcher did not open.")
+        XCTAssertTrue(launcher.staticTexts["No projects yet."].exists)
+
+        // Act -- a new project opens in its own window, named for the project
+        newProject.click()
+        let window = projectWindow("Untitled Project")
         XCTAssertTrue(
-            window.buttons["Project"].waitForExistence(timeout: 45),
-            "The main window did not open."
+            window.waitForExistence(timeout: 15),
+            "A new project did not open its own window, titled with its name."
         )
-        XCTAssertTrue(window.staticTexts["Nothing Selected"].exists)
+
+        // Assert -- the project's own pane is what a new window lands on
+        let newKey = window.textFields["New key"]
+        XCTAssertTrue(
+            newKey.waitForExistence(timeout: 8), "The project detail view did not appear."
+        )
+
+        // Assert -- making projects is no longer a sidebar action
         XCTAssertFalse(
-            window.buttons["Request"].isEnabled,
-            "New Request should be disabled until a project is selected."
-        )
-
-        // Act -- create a project through the sidebar toolbar
-        window.buttons["Project"].click()
-        let nameField = app.textFields.firstMatch
-        XCTAssertTrue(nameField.waitForExistence(timeout: 5), "The new-project prompt is missing.")
-        nameField.typeText("Space API")
-        app.typeKey(.return, modifierFlags: [])  // "Create" is the default button
-
-        // Assert -- the project is selected and its detail view is showing
-        XCTAssertTrue(
-            window.textFields["New key"].waitForExistence(timeout: 8),
-            "The project detail view did not appear."
+            window.buttons["Project"].exists,
+            "The sidebar should no longer offer a New Project button."
         )
 
         // Act -- add a variable the request can reference
-        let newKey = window.textFields["New key"]
-        XCTAssertTrue(newKey.waitForExistence(timeout: 5))
         newKey.click()
         newKey.typeText("host")
         let newValue = window.textFields["New value"]
@@ -95,5 +97,32 @@ final class MainWindowUITests: XCTestCase {
         attachment.name = "Editor"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    /// A project gets one window: asking for the same one again focuses what is
+    /// already open rather than opening a duplicate.
+    @MainActor
+    func testReopeningAProjectFocusesItsExistingWindow() throws {
+        // Arrange -- one project, in its window
+        let newProject = launcher.buttons["New Project"]
+        XCTAssertTrue(newProject.waitForExistence(timeout: 45), "The launcher did not open.")
+        newProject.click()
+
+        let window = projectWindow("Untitled Project")
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        let windowCount = app.windows.count
+
+        // Act -- back to the launcher and open the same project again
+        app.menuBars.menuBarItems["File"].click()
+        app.menuItems["Open Project…"].click()
+        let row = launcher.buttons["Untitled Project"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "The project is not listed as recent.")
+        row.click()
+
+        // Assert -- focused, not duplicated
+        XCTAssertTrue(window.waitForExistence(timeout: 10))
+        XCTAssertLessThanOrEqual(
+            app.windows.count, windowCount, "Opening the same project made a second window."
+        )
     }
 }

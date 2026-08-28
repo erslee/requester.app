@@ -1,9 +1,19 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Project / request outline with create, rename, and delete. Requests carry a
-/// coloured method badge and fall back to a name derived from their URL until
-/// they have been named explicitly; a dot marks one with unsaved edits.
+/// The window's project and its requests, with create, rename, and delete.
+/// Requests carry a coloured method badge and fall back to a name derived from
+/// their URL until they have been named explicitly; a dot marks one with
+/// unsaved edits.
+///
+/// A window shows one project, so the project row here is a single root -- it
+/// is what opens the project's own pane (variables, global headers, the API
+/// document). Making a project is not a sidebar action any more: a new project
+/// gets a new window, so it lives in the File menu.
+///
+/// The bar along the bottom holds the new-request button and the filter, the
+/// way Xcode's navigator does -- the filter is always available, and always in
+/// the same place, rather than being something to open first.
 ///
 /// The outline is built from flat, individually-taggable rows with disclosure
 /// state this view owns, rather than `List(children:)`: that variant offers no
@@ -15,65 +25,23 @@ struct SidebarView: View {
     @State private var renameTarget: RenameTarget?
     @State private var renameText = ""
     @State private var deleteTarget: SidebarSelection?
-    @State private var newProjectName = ""
-    @State private var isCreatingProject = false
+    @FocusState private var isFilterFocused: Bool
 
     var body: some View {
+        list
+    }
+
+    private var list: some View {
         List(selection: $model.selection) {
             ForEach(model.projectList) { project in
-                projectRow(project)
-                    .tag(SidebarSelection.project(project.id))
-                    .contextMenu { projectMenu(project.id) }
-
-                if model.isExpanded(project.id) {
-                    ForEach(model.visibleRequests(in: project.id)) { request in
-                        requestRow(request, in: project.id)
-                            .tag(
-                                SidebarSelection.request(
-                                    projectID: project.id, requestID: request.id
-                                )
-                            )
-                            .contextMenu { requestMenu(projectID: project.id, requestID: request.id) }
-                    }
-                }
+                rows(for: project)
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) { toolbar }
-        .overlay {
-            if model.projectList.isEmpty {
-                ContentUnavailableView {
-                    Label("No Projects", systemImage: "folder.badge.plus")
-                } description: {
-                    Text("Create a project to hold your requests.")
-                } actions: {
-                    Button("New Project") { isCreatingProject = true }
-                }
-            }
-        }
-        .fileImporter(
-            isPresented: $model.isChoosingImportFile,
-            allowedContentTypes: [.json],
-            allowsMultipleSelection: false
-        ) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            Task { await model.importPostmanCollection(from: url) }
-        }
-        .sheet(item: $model.importSummary) { summary in
-            ImportSummaryView(summary: summary)
-        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
+        .onChange(of: model.filterFocusRequests) { isFilterFocused = true }
         .sheet(item: $model.specSummary) { summary in
             SpecSyncSummaryView(summary: summary.result)
-        }
-        .alert("New Project", isPresented: $isCreatingProject) {
-            TextField("Project name", text: $newProjectName)
-            Button("Create") {
-                let name = newProjectName.trimmingCharacters(in: .whitespaces)
-                newProjectName = ""
-                guard !name.isEmpty else { return }
-                Task { await model.createProject(name: name) }
-            }
-            Button("Cancel", role: .cancel) { newProjectName = "" }
         }
         .alert(
             "Rename",
@@ -107,45 +75,100 @@ struct SidebarView: View {
         }
     }
 
-    // MARK: - Toolbar
+    // MARK: - Bottom bar
 
-    private var toolbar: some View {
-        HStack(spacing: 8) {
-            Button {
-                isCreatingProject = true
-            } label: {
-                Label("Project", systemImage: "folder.badge.plus")
-            }
-            .help("Create a new project")
+    /// New request on the left, filter field filling the rest -- the shape of
+    /// Xcode's navigator bar.
+    private var bottomBar: some View {
+        VStack(spacing: 0) {
+            Divider()
 
-            Button {
-                guard let projectID = model.targetProjectIDForNewRequest else { return }
-                Task { await model.createRequest(projectID: projectID) }
-            } label: {
-                Label("Request", systemImage: "plus")
-            }
-            .help("Create a new request in the selected project")
-            .disabled(model.targetProjectIDForNewRequest == nil)
-
-            Spacer()
-
-            Button {
-                model.isChoosingImportFile = true
-            } label: {
-                if model.isImporting {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Label("Import", systemImage: "square.and.arrow.down")
-                        .labelStyle(.iconOnly)
+            HStack(spacing: 8) {
+                Button {
+                    guard let projectID = model.targetProjectIDForNewRequest else { return }
+                    Task { await model.createRequest(projectID: projectID) }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Create a new request in this project")
+                .disabled(model.targetProjectIDForNewRequest == nil)
+                .accessibilityLabel("Request")
+
+                filterField
             }
-            .help("Import collection")
-            .disabled(model.isImporting)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .padding(8)
         .background(.bar)
+    }
+
+    private var filterField: some View {
+        HStack(spacing: 5) {
+            Image(
+                systemName: model.isFiltering
+                    ? "line.3.horizontal.decrease.circle.fill"
+                    : "line.3.horizontal.decrease.circle"
+            )
+            .foregroundStyle(model.isFiltering ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+
+            TextField("Filter", text: $model.filterQuery)
+                .textFieldStyle(.plain)
+                .font(.callout)
+                .focused($isFilterFocused)
+                // Return has nothing left to do -- the list is already the
+                // result -- so it just gets out of the field.
+                .onSubmit { isFilterFocused = false }
+
+            if model.isFiltering {
+                Button {
+                    model.clearFilter()
+                    isFilterFocused = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .keyboardShortcut(.escape, modifiers: [])
+                .help("Clear the filter")
+                .accessibilityLabel("Clear filter")
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            Capsule().fill(.background.secondary)
+        )
+        .overlay(
+            Capsule().strokeBorder(.separator, lineWidth: 1)
+        )
+    }
+
+    /// Split out of `body`: inlined, the row builders plus their tags, ids, and
+    /// context menus are one expression the type-checker gives up on.
+    @ViewBuilder
+    private func rows(for project: Project) -> some View {
+        let projectTag = SidebarSelection.project(project.id)
+        projectRow(project)
+            .tag(projectTag)
+            .id(projectTag)
+            .contextMenu { projectMenu(project.id) }
+
+        if model.isExpanded(project.id) {
+            ForEach(model.visibleRequests(in: project.id)) { request in
+                let requestTag = SidebarSelection.request(
+                    projectID: project.id, requestID: request.id
+                )
+                requestRow(request, in: project.id)
+                    .tag(requestTag)
+                    .id(requestTag)
+                    .contextMenu { requestMenu(projectID: project.id, requestID: request.id) }
+            }
+        }
     }
 
     // MARK: - Rows

@@ -1,7 +1,13 @@
 import Foundation
 
-/// Root observable state: the wired dependency graph, the project/request tree
-/// behind the sidebar, each project's variables, and the current selection.
+/// Root observable state for one window: the wired dependency graph, the
+/// request tree behind the sidebar, the project's variables, and the current
+/// selection.
+///
+/// A window shows exactly one project, so this is scoped to `projectID`.
+/// Repositories still address every project -- the storage layer is shared
+/// across windows -- but nothing above this line reads outside the one project
+/// the window is for.
 ///
 /// Replaces the Qt controllers and their signals -- observation handles the
 /// change notification that `projects_changed` / `requests_changed` /
@@ -9,6 +15,10 @@ import Foundation
 @MainActor
 @Observable
 final class AppModel {
+    /// The project this window is for. Fixed for the model's whole life --
+    /// opening a different project means a different window.
+    let projectID: String
+
     let projects: ProjectRepository
     let requests: RequestRepository
     let variables: VariableRepository
@@ -18,9 +28,20 @@ final class AppModel {
     let historyPanel: HistoryModel
     let specSync: SpecSyncService
 
+    /// The projects this window shows: exactly one, or none while it is
+    /// loading or after the project has been deleted. Kept as a list because
+    /// the sidebar renders it as the tree's single root row.
     var projectList: [Project] = []
+
+    /// The window's project, when it has loaded.
+    var project: Project? { projectList.first }
+
     var requestsByProject: [String: [APIRequest]] = [:]
     var variablesByProject: [String: [String: Variable]] = [:]
+
+    /// Set when the project this window is for has been deleted, so the window
+    /// can close itself rather than sit on an empty tree.
+    private(set) var wasDeleted = false
 
     var selection: SidebarSelection? {
         didSet {
@@ -32,15 +53,6 @@ final class AppModel {
     /// Surfaced as an alert. A failed read or write should say so rather than
     /// vanish into the console.
     var errorMessage: String?
-
-    /// Shown after an import, so what did and did not come across is visible.
-    var importSummary: ImportSummary?
-
-    /// Whether the file picker is open, kept separate from whether an import is
-    /// running -- sharing one flag would have the picker reopen itself the
-    /// moment the import finished.
-    var isChoosingImportFile = false
-    var isImporting = false
 
     /// Whether the file picker for an API document is open, and whether a sync
     /// is running -- separate for the same reason as the import pair above.
@@ -55,6 +67,9 @@ final class AppModel {
         var result: SpecSyncService.Summary
     }
 
+    /// What an import brought in. Produced by the launcher, which owns the
+    /// import flow -- a collection becomes a new project, and a new project
+    /// means a new window.
     struct ImportSummary: Identifiable {
         let id = UUID()
         var collectionName: String
@@ -66,8 +81,13 @@ final class AppModel {
 
     private let interfaceState: InterfaceStateStore
 
-    init(storage: any StorageBackend, interfaceState: InterfaceStateStore = InterfaceStateStore()) {
-        self.interfaceState = interfaceState
+    init(
+        storage: any StorageBackend,
+        projectID: String,
+        interfaceState: InterfaceStateStore? = nil
+    ) {
+        self.projectID = projectID
+        self.interfaceState = interfaceState ?? InterfaceStateStore(projectID: projectID)
         let projects = ProjectRepository(storage: storage)
         let requests = RequestRepository(storage: storage)
         let variables = VariableRepository(storage: storage)
@@ -110,45 +130,38 @@ final class AppModel {
 
     func load() async {
         await reloadProjects()
-        for project in projectList {
-            await reloadRequests(projectID: project.id)
-        }
+        await reloadRequests(projectID: projectID)
         restoreInterfaceState()
     }
 
-    /// Brings the sidebar back as it was left.
+    /// Brings the window back as it was left.
     ///
-    /// Everything is checked against what actually exists first: the data folder
-    /// may have been changed, or a project deleted from another window, and a
-    /// selection pointing at something gone would leave the app on a blank
-    /// pane with no way back.
+    /// What was selected is checked against what actually exists first: the
+    /// data folder may have been changed or edited by hand, and a selection
+    /// pointing at something gone would leave the window on a blank pane with
+    /// no way back. Falling back to the project's own pane is always valid.
     private func restoreInterfaceState() {
-        let existingProjects = Set(projectList.map(\.id))
-        // Assigning the intersection also prunes ids that are no longer real.
-        collapsedProjectIDs = interfaceState.collapsedProjectIDs
-            .intersection(existingProjects)
+        isProjectCollapsed = interfaceState.isProjectCollapsed
 
         guard let saved = interfaceState.selection,
-              existingProjects.contains(saved.projectID)
+              saved.projectID == projectID,
+              let requestID = saved.requestID
         else {
-            interfaceState.selection = nil
+            selection = .project(projectID)
             return
         }
 
-        guard let requestID = saved.requestID else {
-            selection = saved
-            return
-        }
-
-        // The request may have gone while the project remains; falling back to
-        // the project is closer to where the user was than nothing at all.
-        let stillExists = (requestsByProject[saved.projectID] ?? [])
+        let stillExists = (requestsByProject[projectID] ?? [])
             .contains { $0.id == requestID }
-        selection = stillExists ? saved : .project(saved.projectID)
+        selection = stillExists ? saved : .project(projectID)
     }
 
+    /// Re-reads just this window's project. A project that has gone leaves the
+    /// list empty, which is what `wasDeleted` reports to the window.
     func reloadProjects() async {
-        await run { self.projectList = try await self.projects.listAll() }
+        await run {
+            self.projectList = try await self.projects.get(self.projectID).map { [$0] } ?? []
+        }
     }
 
     func reloadRequests(projectID: String) async {
@@ -171,10 +184,10 @@ final class AppModel {
 
     // MARK: - Sidebar expansion
 
-    /// Collapsed rather than expanded ids are tracked, so a project is expanded
-    /// by default and a newly loaded one does not appear empty.
-    private var collapsedProjectIDs: Set<String> = [] {
-        didSet { interfaceState.collapsedProjectIDs = collapsedProjectIDs }
+    /// Collapsed rather than expanded is tracked, so the project is expanded by
+    /// default and a newly opened window does not appear empty.
+    private var isProjectCollapsed = false {
+        didSet { interfaceState.isProjectCollapsed = isProjectCollapsed }
     }
 
     /// Whether removed endpoints are listed. Remembered across launches, and
@@ -192,28 +205,50 @@ final class AppModel {
             .first { $0.id == requestID }?.spec?.isRemoved == true
     }
 
-    /// The rows the sidebar shows for a project.
-    func visibleRequests(in projectID: String) -> [APIRequest] {
+    /// Everything the sidebar would list with no filter typed -- the removed
+    /// endpoints rule applied, and nothing else.
+    private var allVisibleRequests: [APIRequest] {
         let all = requestsByProject[projectID] ?? []
         guard !showsRemovedEndpoints else { return all }
         return all.filter { $0.spec?.isRemoved != true }
     }
 
-    /// How many are hidden right now, so the toggle can say what it would reveal.
+    /// The rows the sidebar shows: what survives the removed-endpoint rule,
+    /// then what survives the filter.
+    ///
+    /// The selected request is kept whatever the filter says. Filtering the row
+    /// you are editing out from under yourself leaves the editor open on a
+    /// request with nothing in the tree pointing at it, with no way back to it
+    /// except clearing the field.
+    func visibleRequests(in projectID: String) -> [APIRequest] {
+        guard projectID == self.projectID else { return [] }
+        let visible = allVisibleRequests
+        guard isFiltering else { return visible }
+        return visible.filter { matchesFilter($0) || $0.id == selection?.requestID }
+    }
+
+    /// Whether one request survives the filter.
+    func matchesFilter(_ request: APIRequest) -> Bool {
+        RequestFilter.matches(
+            request, displayName: displayName(for: request), query: filterQuery
+        )
+    }
+
+    /// How many the removed-endpoint toggle is hiding, so it can say what it
+    /// would reveal. Independent of the filter, which is a separate narrowing.
     func removedRequestCount(in projectID: String) -> Int {
         (requestsByProject[projectID] ?? []).count { $0.spec?.isRemoved == true }
     }
 
+    /// Takes a project id so the sidebar's row code reads the same as it did
+    /// when a window held many; the window only ever asks about its own.
     func isExpanded(_ projectID: String) -> Bool {
-        !collapsedProjectIDs.contains(projectID)
+        projectID == self.projectID && !isProjectCollapsed
     }
 
     func toggleExpansion(_ projectID: String) {
-        if collapsedProjectIDs.contains(projectID) {
-            collapsedProjectIDs.remove(projectID)
-        } else {
-            collapsedProjectIDs.insert(projectID)
-        }
+        guard projectID == self.projectID else { return }
+        isProjectCollapsed.toggle()
     }
 
     /// The label a request shows in the sidebar.
@@ -245,7 +280,7 @@ final class AppModel {
     func open(historyEntry entry: HistoryEntry) {
         guard let requestID = entry.requestID else { return }
         let target = SidebarSelection.request(projectID: entry.projectID, requestID: requestID)
-        collapsedProjectIDs.remove(entry.projectID)
+        isProjectCollapsed = false
 
         historyPanel.selectedEntryID = entry.id
 
@@ -310,14 +345,6 @@ final class AppModel {
 
     // MARK: - Projects and requests
 
-    func createProject(name: String) async {
-        await run {
-            let project = try await self.projects.create(name: name)
-            await self.reloadProjects()
-            self.selection = .project(project.id)
-        }
-    }
-
     func renameProject(_ projectID: String, to name: String) async {
         await run {
             _ = try await self.projects.rename(projectID, to: name)
@@ -325,14 +352,18 @@ final class AppModel {
         }
     }
 
+    /// Deletes the window's project. The window closes itself once this lands
+    /// -- there is nothing left for it to show.
     func deleteProject(_ projectID: String) async {
+        guard projectID == self.projectID else { return }
         await run {
             try await self.projects.delete(projectID)
+            self.interfaceState.forgetProject()
+            self.projectList = []
             self.requestsByProject[projectID] = nil
             self.variablesByProject[projectID] = nil
-            self.collapsedProjectIDs.remove(projectID)
-            if self.selection?.projectID == projectID { self.selection = nil }
-            await self.reloadProjects()
+            self.selection = nil
+            self.wasDeleted = true
         }
     }
 
@@ -341,7 +372,7 @@ final class AppModel {
             let request = try await self.requests.create(projectID: projectID)
             // Expand first: a row inside a collapsed project cannot be selected,
             // and the List would snap the selection back.
-            self.collapsedProjectIDs.remove(projectID)
+            self.isProjectCollapsed = false
             await self.reloadRequests(projectID: projectID)
             self.selection = .request(projectID: projectID, requestID: request.id)
         }
@@ -364,55 +395,6 @@ final class AppModel {
             try await self.requests.delete(projectID: projectID, requestID: requestID)
             if self.selection?.requestID == requestID { self.selection = .project(projectID) }
             await self.reloadRequests(projectID: projectID)
-        }
-    }
-
-    // MARK: - Import
-
-    /// Imports a Postman collection as a new project.
-    ///
-    /// The whole collection lands in one project: Postman folders have no
-    /// equivalent here, so their names are folded into the request names.
-    func importPostmanCollection(from url: URL) async {
-        isImporting = true
-        defer { isImporting = false }
-
-        // A file chosen through the importer is security-scoped, and reading it
-        // without taking that scope fails under the sandbox.
-        let hasScope = url.startAccessingSecurityScopedResource()
-        defer { if hasScope { url.stopAccessingSecurityScopedResource() } }
-
-        do {
-            let data = try Data(contentsOf: url)
-            let collection = try PostmanImporter.collection(from: data)
-
-            let project = try await projects.create(name: collection.name)
-            try await variables.setMany(
-                projectID: project.id, writes: collection.variables, source: .manual
-            )
-
-            for imported in collection.requests {
-                var request = try await requests.create(projectID: project.id)
-                let id = request.id
-                request = imported
-                request.id = id
-                request.projectID = project.id
-                _ = try await requests.save(request)
-            }
-
-            await reloadProjects()
-            await reloadRequests(projectID: project.id)
-            selection = .project(project.id)
-
-            importSummary = ImportSummary(
-                collectionName: collection.name,
-                requestCount: collection.requests.count,
-                variableCount: collection.variables.count,
-                warnings: collection.warnings,
-                scriptsNeedingReview: collection.scriptsNeedingReview
-            )
-        } catch {
-            errorMessage = Self.describe(error)
         }
     }
 
@@ -511,6 +493,34 @@ final class AppModel {
             .joined(separator: " ")
     }
 
+    // MARK: - Filtering
+
+    /// Narrows the sidebar to matching requests as it is typed. Held in memory
+    /// only: a filter is a thing you are doing right now, and coming back to a
+    /// window that silently hides most of its requests would be alarming.
+    var filterQuery = ""
+
+    /// Bumped every time the shortcut is used, so the field takes focus even
+    /// though it is always on screen and has nothing to open.
+    private(set) var filterFocusRequests = 0
+
+    var isFiltering: Bool { RequestFilter.normalized(filterQuery) != nil }
+
+    func focusFilter() {
+        filterFocusRequests += 1
+    }
+
+    func clearFilter() {
+        filterQuery = ""
+    }
+
+    /// How many requests the filter is hiding, so the bar can say so rather
+    /// than leaving an empty tree looking broken.
+    var hiddenByFilterCount: Int {
+        guard isFiltering else { return 0 }
+        return allVisibleRequests.count - visibleRequests(in: projectID).count
+    }
+
     // MARK: - Global headers
 
     /// Replaces the headers every request in the project inherits.
@@ -537,9 +547,8 @@ final class AppModel {
         }
     }
 
-    /// The project a new request should land in: the selected project, or the
-    /// parent of the selected request.
-    var targetProjectIDForNewRequest: String? { selection?.projectID }
+    /// The project a new request lands in: the window's, always.
+    var targetProjectIDForNewRequest: String? { projectID }
 
     private func run(_ work: () async throws -> Void) async {
         do {

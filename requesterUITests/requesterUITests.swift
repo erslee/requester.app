@@ -1,11 +1,12 @@
 import XCTest
 
-/// Confirms the app comes up ready to use: no first-run prompt, a real window,
-/// and the data-folder commands available for anyone who wants to move it.
+/// Confirms the app comes up ready to use: no first-run prompt, the launcher
+/// ready to open or make a project, and the data-folder commands available for
+/// anyone who wants to move it.
 final class RequesterUITests: XCTestCase {
     private var app: XCUIApplication!
 
-    private var window: XCUIElement { app.windows.firstMatch }
+    private var launcher: XCUIElement { app.windows["Requester"] }
 
     /// The window's own floor: `ContentView`'s sidebar, detail, and inspector
     /// minimums (190 + 460 + 250), below which the three columns cannot fit.
@@ -33,11 +34,11 @@ final class RequesterUITests: XCTestCase {
     }
 
     @MainActor
-    func testOpensStraightIntoTheAppWithoutAskingForAFolder() throws {
-        // Assert -- the main window, not a folder picker
+    func testOpensOnTheLauncherWithoutAskingForAFolder() throws {
+        // Assert -- the launcher, not a folder picker
         XCTAssertTrue(
-            window.buttons["Project"].waitForExistence(timeout: 45),
-            "The main window did not open."
+            launcher.buttons["New Project"].waitForExistence(timeout: 45),
+            "The launcher did not open."
         )
         XCTAssertFalse(
             app.staticTexts["Choose a Folder for Your Data"].exists,
@@ -47,16 +48,36 @@ final class RequesterUITests: XCTestCase {
             app.staticTexts["Could Not Open Your Data"].exists,
             "The app failed to open its data folder."
         )
+        XCTAssertTrue(
+            launcher.buttons["New Project"].isHittable,
+            "The launcher's actions are outside the window."
+        )
 
-        // Assert -- a real window, wide enough for all three columns
-        XCTAssertTrue(window.exists)
+        let attachment = XCTAttachment(screenshot: launcher.screenshot())
+        attachment.name = "Launcher"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// The project window carries the three-column layout, so its floor is the
+    /// one worth asserting -- the launcher is a small window by design.
+    @MainActor
+    func testAProjectWindowIsWideEnoughForItsThreeColumns() throws {
+        // Act
+        let newProject = launcher.buttons["New Project"]
+        XCTAssertTrue(newProject.waitForExistence(timeout: 45), "The launcher did not open.")
+        newProject.click()
+
+        // Assert
+        let window = app.windows["Untitled Project"]
+        XCTAssertTrue(window.waitForExistence(timeout: 15), "The project window did not open.")
         XCTAssertGreaterThanOrEqual(
             window.frame.width,
             Self.minimumWindowWidth,
             "The window is narrower than its three columns need."
         )
         XCTAssertTrue(
-            window.buttons["Project"].isHittable,
+            window.buttons["Request"].isHittable,
             "The sidebar is outside the window and cannot be clicked."
         )
 
@@ -66,11 +87,6 @@ final class RequesterUITests: XCTestCase {
                 || window.staticTexts["No History"].exists,
             "The history inspector is not visible."
         )
-
-        let attachment = XCTAttachment(screenshot: window.screenshot())
-        attachment.name = "Launch"
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 
     @MainActor

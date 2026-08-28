@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The main window: sidebar, then either the project detail or the editor over
-/// the response panel, with history in a collapsible pane on the right.
+/// One project's window: sidebar, then either the project detail or the editor
+/// over the response panel, with history in a collapsible pane on the right.
 struct ContentView: View {
     /// One width budget for the whole window. None of the three panes can be
     /// compressed below these, so the window is not allowed to be narrower than
@@ -16,6 +16,8 @@ struct ContentView: View {
 
     @Bindable var model: AppModel
     @State private var isHistoryVisible = true
+
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationSplitView {
@@ -64,6 +66,16 @@ struct ContentView: View {
             }
         }
         .task { await model.load() }
+        // The title bar is how a window says which project it is, so it follows
+        // the name -- including a rename typed in the project pane.
+        .navigationTitle(model.project?.name ?? "Requester")
+        // Menu commands act on the frontmost window, so the window publishes its
+        // model rather than the app reaching for a single global one.
+        .focusedSceneValue(\.appModel, model)
+        // Deleting the project leaves the window with nothing to show.
+        .onChange(of: model.wasDeleted) { _, wasDeleted in
+            if wasDeleted { dismiss() }
+        }
         .alert(
             "Something went wrong",
             isPresented: .init(
