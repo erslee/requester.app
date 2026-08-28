@@ -36,6 +36,11 @@ struct RequesterApp: App {
                 )
         }
         .defaultSize(width: 1320, height: 860)
+        // The app always starts on the launcher. Without this, macOS restores
+        // the project windows from the last session -- but not the project id
+        // each was showing, so they come back as empty "No Project Open"
+        // windows *and* suppress the launcher, leaving no way in at all.
+        .restorationBehavior(.disabled)
     }
 
     @CommandsBuilder

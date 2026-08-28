@@ -28,6 +28,23 @@ final class RequesterUITests: XCTestCase {
         }
     }
 
+
+    /// Brings the launcher up deliberately, rather than assuming it is what the
+    /// app came up on.
+    ///
+    /// Under XCUITest the app can start with windows the automation harness
+    /// restored rather than the launcher, which made these tests fail on the
+    /// state left by a previous run instead of on anything real. File ▸ Open
+    /// Project… opens it or focuses it either way, so the test starts from a
+    /// known place.
+    @MainActor
+    private func openLauncher() {
+        let fileMenu = app.menuBars.menuBarItems["File"]
+        XCTAssertTrue(fileMenu.waitForExistence(timeout: 45), "The app did not finish launching.")
+        fileMenu.click()
+        app.menuItems["Open Project…"].click()
+    }
+
     override func tearDown() {
         app.terminate()
         app = nil
@@ -35,9 +52,12 @@ final class RequesterUITests: XCTestCase {
 
     @MainActor
     func testOpensOnTheLauncherWithoutAskingForAFolder() throws {
+        // Arrange
+        openLauncher()
+
         // Assert -- the launcher, not a folder picker
         XCTAssertTrue(
-            launcher.buttons["New Project"].waitForExistence(timeout: 45),
+            launcher.buttons["New Project"].waitForExistence(timeout: 30),
             "The launcher did not open."
         )
         XCTAssertFalse(
@@ -64,8 +84,9 @@ final class RequesterUITests: XCTestCase {
     @MainActor
     func testAProjectWindowIsWideEnoughForItsThreeColumns() throws {
         // Act
+        openLauncher()
         let newProject = launcher.buttons["New Project"]
-        XCTAssertTrue(newProject.waitForExistence(timeout: 45), "The launcher did not open.")
+        XCTAssertTrue(newProject.waitForExistence(timeout: 30), "The launcher did not open.")
         newProject.click()
 
         // Assert

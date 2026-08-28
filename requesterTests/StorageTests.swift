@@ -7,6 +7,14 @@ import Testing
 actor InMemoryStorage: StorageBackend {
     private var files: [String: String] = [:]
 
+    /// Spelled out rather than left to the compiler. `StorageBackend` is a
+    /// `nonisolated protocol`, and the default initializer synthesized for an
+    /// actor is itself implicitly `nonisolated` -- conforming one to the other
+    /// asks the compiler to apply `nonisolated` to an actor's synchronous
+    /// initializer, which is not a thing. `LocalFileStorage` never hit this
+    /// only because it declares an `init(root:)` of its own.
+    init() {}
+
     func readText(at path: String) -> String? { files[path] }
 
     func writeText(_ text: String, to path: String) { files[path] = text }

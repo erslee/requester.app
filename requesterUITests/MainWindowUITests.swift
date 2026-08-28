@@ -30,6 +30,23 @@ final class MainWindowUITests: XCTestCase {
         }
     }
 
+
+    /// Brings the launcher up deliberately, rather than assuming it is what the
+    /// app came up on.
+    ///
+    /// Under XCUITest the app can start with windows the automation harness
+    /// restored rather than the launcher, which made these tests fail on the
+    /// state left by a previous run instead of on anything real. File ▸ Open
+    /// Project… opens it or focuses it either way, so the test starts from a
+    /// known place.
+    @MainActor
+    private func openLauncher() {
+        let fileMenu = app.menuBars.menuBarItems["File"]
+        XCTAssertTrue(fileMenu.waitForExistence(timeout: 45), "The app did not finish launching.")
+        fileMenu.click()
+        app.menuItems["Open Project…"].click()
+    }
+
     override func tearDown() {
         app.terminate()
         app = nil
@@ -37,10 +54,12 @@ final class MainWindowUITests: XCTestCase {
 
     @MainActor
     func testCreatesAProjectAndRequestAndEditsIt() throws {
-        // Assert -- an empty folder lands on the launcher, not a picker.
-        // A cold Debug launch can be slow, hence the generous wait.
+        // Arrange
+        openLauncher()
+
+        // Assert -- an empty folder offers a new project, not a folder picker
         let newProject = launcher.buttons["New Project"]
-        XCTAssertTrue(newProject.waitForExistence(timeout: 45), "The launcher did not open.")
+        XCTAssertTrue(newProject.waitForExistence(timeout: 30), "The launcher did not open.")
         XCTAssertTrue(launcher.staticTexts["No projects yet."].exists)
 
         // Act -- a new project opens in its own window, named for the project
@@ -104,8 +123,9 @@ final class MainWindowUITests: XCTestCase {
     @MainActor
     func testReopeningAProjectFocusesItsExistingWindow() throws {
         // Arrange -- one project, in its window
+        openLauncher()
         let newProject = launcher.buttons["New Project"]
-        XCTAssertTrue(newProject.waitForExistence(timeout: 45), "The launcher did not open.")
+        XCTAssertTrue(newProject.waitForExistence(timeout: 30), "The launcher did not open.")
         newProject.click()
 
         let window = projectWindow("Untitled Project")
@@ -113,8 +133,7 @@ final class MainWindowUITests: XCTestCase {
         let windowCount = app.windows.count
 
         // Act -- back to the launcher and open the same project again
-        app.menuBars.menuBarItems["File"].click()
-        app.menuItems["Open Project…"].click()
+        openLauncher()
         let row = launcher.buttons["Untitled Project"]
         XCTAssertTrue(row.waitForExistence(timeout: 10), "The project is not listed as recent.")
         row.click()
