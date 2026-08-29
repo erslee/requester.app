@@ -102,19 +102,29 @@ final class MainWindowUITests: XCTestCase {
         XCTAssertTrue(window.staticTexts["host"].waitForExistence(timeout: 5))
         XCTAssertTrue(window.staticTexts["manual"].exists)
 
-        // Act -- create a request in that project
+        // Assert -- the sidebar's bottom bar is inside its window. If the window
+        // is too narrow for all three columns the split view overflows and the
+        // sidebar lands outside it, which is the regression worth catching.
+        //
+        // Containment, not hittability: the bar sits in the window's bottom-left
+        // corner, and on a small screen the Dock covers that corner -- CI runs
+        // at 1024x768, where the button is on screen and enabled but has the
+        // Dock on top of it. Whether the desktop happens to cover a corner is
+        // not this app's layout.
         let requestButton = window.buttons["Request"]
-        // Hittability matters on its own: if the window is too narrow for all
-        // three columns, the split view overflows and the sidebar lands outside
-        // the window, where it exists and is enabled but cannot be clicked.
+        XCTAssertTrue(requestButton.exists, "The sidebar has no new-request button.")
         XCTAssertTrue(
-            requestButton.isHittable,
-            "The sidebar's bottom bar is unreachable. "
-                + "window=\(window.frame) button=\(requestButton.frame) "
-                + "exists=\(requestButton.exists) enabled=\(requestButton.isEnabled) "
-                + "windowContainsButton=\(window.frame.contains(requestButton.frame))"
+            window.frame.contains(requestButton.frame),
+            "The sidebar's bottom bar is outside the window. "
+                + "window=\(window.frame) button=\(requestButton.frame)"
         )
-        requestButton.click()
+
+        // Act -- create a request from the project row's menu rather than that
+        // button, so the test does not depend on the corner being clickable.
+        let projectRow = window.outlines.cells.staticTexts["Untitled Project"]
+        XCTAssertTrue(projectRow.waitForExistence(timeout: 5), "The project row is missing.")
+        projectRow.rightClick()
+        app.menuItems["New Request"].click()
         let urlField = window.textFields["https://example.com/path?query=value"]
         XCTAssertTrue(urlField.waitForExistence(timeout: 8), "The request editor did not open.")
 

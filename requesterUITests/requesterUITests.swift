@@ -97,9 +97,16 @@ final class RequesterUITests: XCTestCase {
             Self.minimumWindowWidth,
             "The window is narrower than its three columns need."
         )
+        // Containment rather than hittability, for the same reason as in
+        // MainWindowUITests: the button is in the window's bottom-left corner,
+        // which the Dock covers on a small screen. What matters here is that
+        // the sidebar is inside its window, not what the desktop is doing.
+        let requestButton = window.buttons["Request"]
+        XCTAssertTrue(requestButton.exists, "The sidebar has no new-request button.")
         XCTAssertTrue(
-            window.buttons["Request"].isHittable,
-            "The sidebar is outside the window and cannot be clicked."
+            window.frame.contains(requestButton.frame),
+            "The sidebar is outside the window. "
+                + "window=\(window.frame) button=\(requestButton.frame)"
         )
 
         // Assert -- the history inspector is showing, as it is by default
