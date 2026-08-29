@@ -43,6 +43,17 @@ final class AppModel {
     /// can close itself rather than sit on an empty tree.
     private(set) var wasDeleted = false
 
+    /// A project that has been made but not yet written.
+    ///
+    /// A new project is held here rather than on disk until the user changes
+    /// something, so opening one and closing it again leaves nothing behind --
+    /// no "Untitled Project 4" for a window that was never used. The first
+    /// write of any kind materialises it; see `write(_:)`.
+    private var unsavedProject: Project?
+
+    /// Whether this window's project exists on disk yet.
+    var isProjectUnsaved: Bool { unsavedProject != nil }
+
     /// The row the sidebar should scroll into view.
     ///
     /// Set only when something other than a click moves the selection -- so
@@ -97,9 +108,11 @@ final class AppModel {
     init(
         storage: any StorageBackend,
         projectID: String,
+        unsavedProject: Project? = nil,
         interfaceState: InterfaceStateStore? = nil
     ) {
         self.projectID = projectID
+        self.unsavedProject = unsavedProject
         self.interfaceState = interfaceState ?? InterfaceStateStore(projectID: projectID)
         let projects = ProjectRepository(storage: storage)
         let requests = RequestRepository(storage: storage)
@@ -172,9 +185,17 @@ final class AppModel {
 
     /// Re-reads just this window's project. A project that has gone leaves the
     /// list empty, which is what `wasDeleted` reports to the window.
+    ///
+    /// One that has never been written falls back to the unsaved copy, so the
+    /// window shows its name and takes edits exactly as a saved one does.
     func reloadProjects() async {
         await run {
-            self.projectList = try await self.projects.get(self.projectID).map { [$0] } ?? []
+            if let stored = try await self.projects.get(self.projectID) {
+                self.unsavedProject = nil
+                self.projectList = [stored]
+            } else {
+                self.projectList = self.unsavedProject.map { [$0] } ?? []
+            }
         }
     }
 
@@ -365,7 +386,7 @@ final class AppModel {
     // MARK: - Projects and requests
 
     func renameProject(_ projectID: String, to name: String) async {
-        await run {
+        await write {
             _ = try await self.projects.rename(projectID, to: name)
             await self.reloadProjects()
         }
@@ -375,8 +396,14 @@ final class AppModel {
     /// -- there is nothing left for it to show.
     func deleteProject(_ projectID: String) async {
         guard projectID == self.projectID else { return }
+        // Deliberately `run`, not `write`: a project that was never written has
+        // nothing to delete, and materialising it first just to remove it again
+        // is the opposite of what deferring the write is for.
         await run {
-            try await self.projects.delete(projectID)
+            if self.unsavedProject == nil {
+                try await self.projects.delete(projectID)
+            }
+            self.unsavedProject = nil
             self.interfaceState.forgetProject()
             self.projectList = []
             self.requestsByProject[projectID] = nil
@@ -387,7 +414,7 @@ final class AppModel {
     }
 
     func createRequest(projectID: String, folder: [String] = []) async {
-        await run {
+        await write {
             let request = try await self.requests.create(projectID: projectID, folder: folder)
             // Expand first: a row inside a collapsed project or folder cannot
             // be selected, and the List would snap the selection back.
@@ -404,7 +431,7 @@ final class AppModel {
     }
 
     func renameRequest(projectID: String, requestID: String, to name: String) async {
-        await run {
+        await write {
             guard var request = try await self.requests.get(
                 projectID: projectID, requestID: requestID
             ) else { return }
@@ -416,7 +443,7 @@ final class AppModel {
     }
 
     func deleteRequest(projectID: String, requestID: String) async {
-        await run {
+        await write {
             try await self.requests.delete(projectID: projectID, requestID: requestID)
             if self.selection?.requestID == requestID { self.selection = .project(projectID) }
             await self.reloadRequests(projectID: projectID)
@@ -434,7 +461,7 @@ final class AppModel {
         var source = SpecSource(kind: .url)
         source.url = url.trimmingCharacters(in: .whitespacesAndNewlines)
         source.headers = headers
-        await run { _ = try await self.projects.setSpecSource(source, for: projectID) }
+        await write { _ = try await self.projects.setSpecSource(source, for: projectID) }
         await reloadProjects()
         await syncSpec(projectID: projectID, using: .saved)
     }
@@ -449,7 +476,7 @@ final class AppModel {
     /// refresh uses, which is what makes re-uploading behave like updating.
     func replaceSpecFile(projectID: String, url: URL) async {
         if projectList.first(where: { $0.id == projectID })?.specSource == nil {
-            await run {
+            await write {
                 _ = try await self.projects.setSpecSource(SpecSource(kind: .file), for: projectID)
             }
         }
@@ -458,7 +485,7 @@ final class AppModel {
 
     /// Saves edits to the source -- its URL and headers -- without syncing.
     func saveSpecSource(projectID: String, source: SpecSource) async {
-        await run { _ = try await self.projects.setSpecSource(source, for: projectID) }
+        await write { _ = try await self.projects.setSpecSource(source, for: projectID) }
         await reloadProjects()
     }
 
@@ -466,7 +493,7 @@ final class AppModel {
     /// included, so re-attaching the same document reconciles rather than
     /// duplicating.
     func detachSpec(projectID: String) async {
-        await run { _ = try await self.projects.setSpecSource(nil, for: projectID) }
+        await write { _ = try await self.projects.setSpecSource(nil, for: projectID) }
         await reloadProjects()
     }
 
@@ -481,6 +508,9 @@ final class AppModel {
         await editor.flushAutosave()
 
         do {
+            // A sync writes requests and the project's own source, so the
+            // project has to exist on disk before it runs.
+            try await materializeProjectIfNeeded()
             let summary = try await specSync.sync(projectID: projectID, using: source)
             await reloadProjects()
             await reloadRequests(projectID: projectID)
@@ -571,7 +601,7 @@ final class AppModel {
     /// Makes a folder inside `parent`, named around whatever is already there.
     func createFolder(in parent: [String] = []) async {
         let name = FolderTree.availableName("New Folder", in: parent, among: allFolderPaths)
-        await run {
+        await write {
             _ = try await self.projects.setFolders(
                 (self.project?.folders ?? []) + [parent + [name]], for: self.projectID
             )
@@ -581,7 +611,7 @@ final class AppModel {
 
     /// Moves one request into a folder.
     func move(requestID: String, to folder: [String]) async {
-        await run {
+        await write {
             guard try await self.requests.move(
                 projectID: self.projectID, requestID: requestID, to: folder
             ) != nil else { return }
@@ -620,7 +650,7 @@ final class AppModel {
     /// The one write behind both renaming and moving: every path under `from`
     /// is rewritten, on the requests and on the project's own list.
     private func rewriteFolder(from: [String], to destination: [String]) async {
-        await run {
+        await write {
             try await self.requests.moveFolder(
                 projectID: self.projectID, from: from, to: destination
             )
@@ -637,7 +667,7 @@ final class AppModel {
     /// confirmed delete -- nothing else here removes a request the user did not
     /// name.
     func deleteFolder(_ folder: [String]) async {
-        await run {
+        await write {
             try await self.requests.deleteFolder(projectID: self.projectID, folder: folder)
             let declared = (self.project?.folders ?? []).filter {
                 !FolderTree.isSelfOrDescendant($0, of: folder)
@@ -686,7 +716,7 @@ final class AppModel {
 
     /// Replaces the headers every request in the project inherits.
     func setProjectHeaders(_ headers: [KeyValueItem], for projectID: String) async {
-        await run {
+        await write {
             _ = try await self.projects.setGlobalHeaders(headers, for: projectID)
             await self.reloadProjects()
         }
@@ -695,14 +725,14 @@ final class AppModel {
     // MARK: - Variables
 
     func setVariable(projectID: String, key: String, value: String) async {
-        await run {
+        await write {
             try await self.variables.setOne(projectID: projectID, key: key, value: value)
             await self.reloadVariables(projectID: projectID)
         }
     }
 
     func deleteVariable(projectID: String, key: String) async {
-        await run {
+        await write {
             try await self.variables.delete(projectID: projectID, key: key)
             await self.reloadVariables(projectID: projectID)
         }
@@ -731,5 +761,29 @@ final class AppModel {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Every action that changes something goes through here rather than
+    /// `run`, so a project held unsaved is written exactly once, on the first
+    /// change, before whatever asked for that change happens.
+    ///
+    /// Split from `run` rather than folded into it: reloading is not a change,
+    /// and materialising on a read would write the very projects this is meant
+    /// to keep off disk.
+    private func write(_ work: () async throws -> Void) async {
+        do {
+            try await materializeProjectIfNeeded()
+            try await work()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Writes a project that until now existed only in memory.
+    private func materializeProjectIfNeeded() async throws {
+        guard let project = unsavedProject else { return }
+        unsavedProject = nil
+        try await projects.create(project)
+        await reloadProjects()
     }
 }

@@ -199,10 +199,8 @@ struct LauncherView: View {
     private var actions: some View {
         HStack(spacing: 8) {
             Button {
-                Task {
-                    guard let id = await launch.createProject() else { return }
-                    open(id)
-                }
+                guard let id = launch.createProject() else { return }
+                open(id)
             } label: {
                 Label("New Project", systemImage: "plus")
             }

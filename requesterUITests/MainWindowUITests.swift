@@ -157,6 +157,19 @@ final class MainWindowUITests: XCTestCase {
         XCTAssertTrue(launcher.waitForNonExistence(timeout: 10))
         let windowCount = app.windows.count
 
+        // Arrange -- give it a request. A new project is held in memory until
+        // something about it changes, so an untouched one is deliberately not
+        // written and would not be listed to reopen.
+        let projectRow = window.outlines.cells.staticTexts["Untitled Project"]
+        XCTAssertTrue(projectRow.waitForExistence(timeout: 5), "The project row is missing.")
+        projectRow.rightClick()
+        app.menuItems["New Request"].click()
+        XCTAssertTrue(
+            window.textFields["https://example.com/path?query=value"]
+                .waitForExistence(timeout: 8),
+            "The request was not created."
+        )
+
         // Act -- back to the launcher and open the same project again
         openLauncher()
         let row = launcher.buttons["Untitled Project"]

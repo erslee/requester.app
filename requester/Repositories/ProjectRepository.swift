@@ -15,6 +15,17 @@ nonisolated struct ProjectRepository: Sendable {
         return project
     }
 
+    /// Writes a project that already exists in memory.
+    ///
+    /// For one made but not yet written: a new project is held unsaved until
+    /// the user changes something, so the id and name are decided before there
+    /// is any file. See `AppModel.materializeProjectIfNeeded()`.
+    @discardableResult
+    func create(_ project: Project) async throws -> Project {
+        try await storage.writeModel(project, to: path(for: project.id))
+        return project
+    }
+
     func get(_ projectID: String) async throws -> Project? {
         try await storage.readModel(Project.self, at: path(for: projectID))
     }

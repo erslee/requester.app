@@ -82,10 +82,8 @@ struct RequesterApp: App {
     }
 
     private func newProject() {
-        Task {
-            guard let id = await launch.createProject() else { return }
-            openWindow(id: WindowID.project, value: id)
-        }
+        guard let id = launch.createProject() else { return }
+        openWindow(id: WindowID.project, value: id)
     }
 }
 
@@ -140,7 +138,11 @@ private struct ProjectWindow: View {
         // Registered while the window is up, so the launcher can refuse to
         // delete a project out from under a window that is showing it.
         .onAppear { if let projectID { launch.windowOpened(projectID) } }
-        .onDisappear { if let projectID { launch.windowClosed(projectID) } }
+        .onDisappear {
+            guard let projectID else { return }
+            // A window that never wrote its project takes it with it.
+            launch.windowClosed(projectID, wasSaved: model?.isProjectUnsaved == false)
+        }
     }
 }
 
@@ -209,6 +211,14 @@ final class LaunchState {
     /// rather than leaving a window showing data that is no longer there.
     private(set) var openProjectIDs: Set<String> = []
 
+    /// Projects made but not yet written, by id.
+    ///
+    /// A new project is nothing but a name until the user changes something,
+    /// so it is held here and handed to its window rather than written -- open
+    /// one, close it, and there is no empty project left in the folder. The
+    /// window writes it on the first change; see `AppModel`.
+    private var unsavedProjects: [String: Project] = [:]
+
     var isUsingDefaultFolder: Bool { roots.isUsingDefaultRoot }
 
     var storage: LocalFileStorage? {
@@ -272,8 +282,15 @@ final class LaunchState {
     /// The model for one window. `nil` when there is no folder, no project id,
     /// or the id no longer resolves to anything on disk.
     func model(for projectID: String?) async -> AppModel? {
-        guard let storage, let projectID,
-              let project = try? await ProjectRepository(storage: storage).get(projectID),
+        guard let storage, let projectID else { return nil }
+
+        // One that has never been written yet: hand its in-memory copy to the
+        // window, which persists it as soon as anything changes.
+        if let unsaved = unsavedProjects[projectID] {
+            return AppModel(storage: storage, projectID: projectID, unsavedProject: unsaved)
+        }
+
+        guard let project = try? await ProjectRepository(storage: storage).get(projectID),
               project != nil
         else { return nil }
 
@@ -283,10 +300,6 @@ final class LaunchState {
 
     func windowOpened(_ projectID: String) {
         openProjectIDs.insert(projectID)
-    }
-
-    func windowClosed(_ projectID: String) {
-        openProjectIDs.remove(projectID)
     }
 
     /// Deletes a project and everything remembered about it: its requests,
@@ -307,17 +320,25 @@ final class LaunchState {
         }
     }
 
-    /// Creates a project and hands back its id, for the caller to open a window
+    /// Makes a project and hands back its id, for the caller to open a window
     /// on. Named rather than prompted: the project pane's name field is the
     /// first thing in the new window, and typing there beats a modal.
-    func createProject(named name: String = "Untitled Project") async -> String? {
-        guard let storage else { return nil }
-        do {
-            return try await ProjectRepository(storage: storage).create(name: name).id
-        } catch {
-            errorMessage = Self.describe(error)
-            return nil
-        }
+    ///
+    /// Nothing is written here. The project exists only in memory until its
+    /// window changes something, so making one and closing it again leaves no
+    /// empty project behind.
+    func createProject(named name: String = "Untitled Project") -> String? {
+        guard storage != nil else { return nil }
+        let project = Project(id: ProjectRepository.newIdentifier(), name: name)
+        unsavedProjects[project.id] = project
+        return project.id
+    }
+
+    /// Forgets an unsaved project once its window has gone, so an abandoned one
+    /// does not sit in memory for the rest of the session.
+    func windowClosed(_ projectID: String, wasSaved: Bool) {
+        openProjectIDs.remove(projectID)
+        if !wasSaved { unsavedProjects[projectID] = nil }
     }
 
     /// Imports a Postman collection as a new project, returning its id.
@@ -361,6 +382,8 @@ final class LaunchState {
                 _ = try await requests.save(request)
             }
 
+            // An import is written straight away: it arrives with requests in
+            // it, so there is no empty project to avoid.
             importSummary = AppModel.ImportSummary(
                 collectionName: collection.name,
                 requestCount: collection.requests.count,
