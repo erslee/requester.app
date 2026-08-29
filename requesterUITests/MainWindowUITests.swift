@@ -107,7 +107,13 @@ final class MainWindowUITests: XCTestCase {
         // Hittability matters on its own: if the window is too narrow for all
         // three columns, the split view overflows and the sidebar lands outside
         // the window, where it exists and is enabled but cannot be clicked.
-        XCTAssertTrue(requestButton.isHittable, "The sidebar's bottom bar is outside the window.")
+        XCTAssertTrue(
+            requestButton.isHittable,
+            "The sidebar's bottom bar is unreachable. "
+                + "window=\(window.frame) button=\(requestButton.frame) "
+                + "exists=\(requestButton.exists) enabled=\(requestButton.isEnabled) "
+                + "windowContainsButton=\(window.frame.contains(requestButton.frame))"
+        )
         requestButton.click()
         let urlField = window.textFields["https://example.com/path?query=value"]
         XCTAssertTrue(urlField.waitForExistence(timeout: 8), "The request editor did not open.")
