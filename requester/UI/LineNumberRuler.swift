@@ -68,12 +68,45 @@ final class LineNumberRuler: NSRulerView {
 
     /// Wide enough for the highest line number the document can show, so the
     /// text does not shift sideways as the reader scrolls into five digits.
+    ///
+    /// The scroll view is re-tiled whenever that width changes. It insets its
+    /// content view by the thickness it last tiled at, not by the current one,
+    /// so a gutter that grew past it -- which is every gutter, since AppKit
+    /// starts at 16pt and two digits already need more -- would paint over the
+    /// first characters of every line.
     private func invalidateThickness() {
         let digits = max(String(source?.document.lineCount ?? 1).count, 2)
         let width = ("0" as NSString)
             .size(withAttributes: [.font: Self.font]).width * CGFloat(digits)
         let controls = (source?.showsFoldControls ?? false) ? Self.foldControlWidth : 0
-        ruleThickness = (width + controls + Self.horizontalPadding * 2).rounded(.up)
+        let thickness = (width + controls + Self.horizontalPadding * 2).rounded(.up)
+
+        guard abs(thickness - ruleThickness) > 0.5 else { return }
+        ruleThickness = thickness
+        // Tiling lays out the document, so it is only worth doing on a real
+        // change -- and the guard above is what keeps this off the path of
+        // every scroll and every redraw.
+        scrollView?.tile()
+        returnToStartOfLine()
+    }
+
+    /// Puts the document back against the start of its lines after a re-tile.
+    ///
+    /// Room for the gutter is reserved as a *left content inset* on the clip
+    /// view, not by narrowing it -- so the leftmost scroll position is minus
+    /// that inset, and `x = 0` is the position where the gutter covers the
+    /// first characters of every line. A document nobody has scrolled sits at
+    /// 0 until something moves it, which is why the text arrived clipped and
+    /// a short line -- the `[` opening a JSON array -- vanished entirely.
+    ///
+    /// Only the horizontal offset is touched: the row the reader is on is
+    /// worth keeping, the column they never chose is not.
+    private func returnToStartOfLine() {
+        guard let clipView = scrollView?.contentView else { return }
+        let start = -clipView.contentInsets.left
+        guard abs(clipView.bounds.origin.x - start) > 0.5 else { return }
+        clipView.scroll(to: NSPoint(x: start, y: clipView.bounds.origin.y))
+        scrollView?.reflectScrolledClipView(clipView)
     }
 
     // MARK: - Drawing
