@@ -47,12 +47,29 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             DEVELOPMENT_TEAM=""
 
+      # A crashed test process reports every test as failed with no stack, and
+      # the result bundle carries none either -- the reason is only in the
+      # system's own crash report.
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          mkdir -p CrashReports
+          cp ~/Library/Logs/DiagnosticReports/*.ips CrashReports/ 2>/dev/null || true
+          for report in CrashReports/*.ips; do
+            [ -e "$report" ] || continue
+            echo "===== $report ====="
+            head -c 6000 "$report"
+            echo
+          done
+
       - name: Upload results
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: unit-test-results
-          path: TestResults.xcresult
+          path: |
+            TestResults.xcresult
+            CrashReports
 
   ui-test:
     name: UI tests

@@ -27,7 +27,6 @@ private enum ViewLayout {
 /// so the text arrived clipped -- the first characters of each line hidden,
 /// and a one-character line gone altogether. None of that shows in the text
 /// itself; it is purely where the views ended up, so it is measured here.
-@Suite(.enabled(if: ViewLayout.isAvailable))
 @MainActor
 struct GutterGeometryTests {
     /// The editor as `CodeEditor` assembles it, showing a numbered body long
