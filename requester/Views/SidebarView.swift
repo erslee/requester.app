@@ -143,8 +143,8 @@ struct SidebarView: View {
                         RoundedRectangle(cornerRadius: 5).fill(.quaternary)
                     }
                 }
-                .help(tab.title)
-                .accessibilityLabel(tab.title)
+                .help(tab.navigatorName)
+                .accessibilityLabel(tab.navigatorName)
                 .accessibilityAddTraits(isSelected ? [.isSelected] : [])
             }
 

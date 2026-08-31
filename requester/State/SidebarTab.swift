@@ -11,10 +11,16 @@ enum SidebarTab: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
-    var title: String {
+    /// What the tab is tooltipped and announced by.
+    ///
+    /// "Project" on its own is deliberately avoided: the sidebar used to carry
+    /// a New Project button with that accessibility label, and the UI tests
+    /// assert its absence by that label -- a tab answering to it would read as
+    /// the button coming back.
+    var navigatorName: String {
         switch self {
-        case .project: "Project"
-        case .favorites: "Favorites"
+        case .project: "Project Navigator"
+        case .favorites: "Favorites Navigator"
         }
     }
 
