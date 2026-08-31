@@ -26,13 +26,27 @@ struct CodeEditor: NSViewRepresentable {
     /// keeps one line to one gutter row.
     var wrapsLines: Bool = true
 
+    /// How wide the widest line is, in characters. The font is monospaced, so
+    /// this is the whole document's width without laying any of it out.
+    ///
+    /// Passed in rather than read off the gutter: a view can want sideways
+    /// scrolling and no line numbers at all -- the raw view of a response is
+    /// exactly that -- and deriving the width from the gutter left that case
+    /// wrapping whatever the toggle said.
+    var longestLineLength: Int = 0
+
     /// The search match the reader last jumped to. It is scrolled into view and
     /// shaded apart from the others.
     var highlightedMatch: NSRange?
 
-    func makeNSView(context: Context) -> NSScrollView {
+    /// The AppKit half of the editor: a text view inside a scroll view, set up
+    /// the way every editor here needs it.
+    ///
+    /// Static, and free of the coordinator and of SwiftUI, so the geometry it
+    /// produces -- where the text begins once a gutter has taken its width --
+    /// can be built and measured in a test.
+    static func makeScrollView(isEditable: Bool) -> (NSScrollView, NSTextView) {
         let textView = NSTextView()
-        textView.delegate = context.coordinator
         textView.isEditable = isEditable
         textView.isRichText = false
         textView.allowsUndo = isEditable
@@ -40,7 +54,7 @@ struct CodeEditor: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
-        textView.font = Self.font
+        textView.font = font
         textView.textContainerInset = CGSize(width: 6, height: 8)
         textView.drawsBackground = false
         textView.autoresizingMask = [.width]
@@ -51,21 +65,18 @@ struct CodeEditor: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
-        Self.setWraps(wrapsLines, width: unwrappedWidth, on: textView, in: scrollView)
 
-        if gutter != nil {
-            let ruler = LineNumberRuler(scrollView: scrollView)
-            ruler.onToggleFold = { [weak coordinator = context.coordinator] line in
-                coordinator?.onToggleFold?(line)
-            }
-            scrollView.verticalRulerView = ruler
-            scrollView.hasVerticalRuler = true
-            scrollView.rulersVisible = true
-        }
         for axis in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
             scrollView.setContentHuggingPriority(.defaultLow, for: axis)
             scrollView.setContentCompressionResistancePriority(.defaultLow, for: axis)
         }
+        return (scrollView, textView)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let (scrollView, textView) = Self.makeScrollView(isEditable: isEditable)
+        textView.delegate = context.coordinator
+        Self.setWraps(wrapsLines, width: unwrappedWidth, on: textView, in: scrollView)
 
         context.coordinator.textView = textView
 
@@ -79,7 +90,7 @@ struct CodeEditor: NSViewRepresentable {
         context.coordinator.onToggleFold = onToggleFold
         textView.string = text
         context.coordinator.displayedText = text
-        (scrollView.verticalRulerView as? LineNumberRuler)?.source = gutter
+        syncGutter(on: scrollView, coordinator: context.coordinator)
         return scrollView
     }
 
@@ -138,6 +149,45 @@ struct CodeEditor: NSViewRepresentable {
 
         // The gutter draws from the projection, so it is refreshed whenever the
         // text it numbers might have moved. Redrawing costs a screenful.
+        syncGutter(on: scrollView, coordinator: context.coordinator)
+    }
+
+    /// Brings the gutter into line with what the caller is asking for.
+    ///
+    /// Both directions matter, and neither is a one-off at construction time:
+    /// a response switched to Raw stops wanting one, and a body that is only
+    /// JSON on the second send starts wanting one. A ruler left installed with
+    /// no source would keep its width and its separator line down the left of
+    /// a view that no longer numbers anything.
+    private func syncGutter(on scrollView: NSScrollView, coordinator: Coordinator) {
+        Self.syncGutter(gutter, on: scrollView) { [weak coordinator] line in
+            coordinator?.onToggleFold?(line)
+        }
+    }
+
+    /// Static half of the above, so a test can drive the same install.
+    static func syncGutter(
+        _ gutter: LineNumberRuler.Source?,
+        on scrollView: NSScrollView,
+        onToggleFold: @escaping (Int) -> Void
+    ) {
+        guard gutter != nil else {
+            // Hiding the rulers re-tiles, which is what gives the width back to
+            // the text rather than leaving an empty strip.
+            scrollView.rulersVisible = false
+            return
+        }
+
+        if scrollView.verticalRulerView as? LineNumberRuler == nil {
+            // Order matters: a ruler assigned while the scroll view has no
+            // vertical ruler is dropped on the floor, and the space for it is
+            // only reserved once both flags are on.
+            scrollView.hasVerticalRuler = true
+            let ruler = LineNumberRuler(scrollView: scrollView)
+            ruler.onToggleFold = onToggleFold
+            scrollView.verticalRulerView = ruler
+        }
+        scrollView.rulersVisible = true
         (scrollView.verticalRulerView as? LineNumberRuler)?.source = gutter
     }
 
@@ -163,7 +213,7 @@ struct CodeEditor: NSViewRepresentable {
     /// and the first also fights the tracking that derives the container width
     /// from the view's -- they disagree by the text container inset, so every
     /// update would overwrite what the last layout pass had just worked out.
-    private static func setWraps(
+    static func setWraps(
         _ wraps: Bool, width contentWidth: CGFloat,
         on textView: NSTextView, in scrollView: NSScrollView
     ) {
@@ -200,8 +250,7 @@ struct CodeEditor: NSViewRepresentable {
     }
 
     private var unwrappedWidth: CGFloat {
-        guard let gutter else { return 0 }
-        return Self.unwrappedWidth(longestLineLength: gutter.projection.longestLineLength)
+        Self.unwrappedWidth(longestLineLength: longestLineLength)
     }
 
     func makeCoordinator() -> Coordinator {

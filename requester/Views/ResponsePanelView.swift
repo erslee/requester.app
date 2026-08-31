@@ -262,15 +262,22 @@ struct ResponsePanelView: View {
     /// A minified response arrives as one enormous line, which is unreadable and
     /// also the worst case for text layout. Pretty is therefore the default.
     ///
-    /// One pass produces the text, its line index and its fold points together;
-    /// the raw view skips the formatting but still gets line numbers.
+    /// One pass produces the text, its line index and its fold points together.
+    /// The raw view keeps the index -- the wrap control reads the longest line
+    /// off it -- but does not draw a gutter from it.
     private func reformat() {
-        document = format == .pretty && looksLikeJSON
-            ? FoldableText.json(bodyText)
-            : FoldableText.plain(bodyText)
+        // The Raw / Pretty picker is only offered for a JSON body, so a body
+        // that is not JSON has nothing on screen to switch back with -- Raw
+        // left over from the previous response would be stuck.
+        if !looksLikeJSON { format = .pretty }
+        document = isPretty ? FoldableText.json(bodyText) : FoldableText.plain(bodyText)
         folded = []
         reproject()
     }
+
+    /// Whether the body is being shown formatted. Raw means the bytes as they
+    /// arrived: no numbering, no colouring, nothing folded.
+    private var isPretty: Bool { format == .pretty && looksLikeJSON }
 
     private func reproject() {
         projection = document.projected(folding: folded)
@@ -288,13 +295,16 @@ struct ResponsePanelView: View {
         CodeEditor.canUnwrap(longestLineLength: projection.longestLineLength)
     }
 
-    private var gutter: LineNumberRuler.Source {
-        .init(
+    /// The gutter, and `nil` for the raw view -- which is the whole point of
+    /// asking for raw: the body as it arrived, unnumbered and uncoloured.
+    private var gutter: LineNumberRuler.Source? {
+        guard isPretty else { return nil }
+        return .init(
             document: document,
             projection: projection,
             folded: folded,
-            // Nothing in a header list or an unformatted body opens a block.
-            showsFoldControls: selectedTab == .body && format == .pretty && looksLikeJSON
+            // Nothing in an unformatted body opens a block.
+            showsFoldControls: true
         )
     }
 
@@ -306,13 +316,14 @@ struct ResponsePanelView: View {
         case .body:
             CodeEditor(
                 text: .constant(projection.text),
-                options: .init(json: looksLikeJSON),
+                options: .init(json: isPretty),
                 isEditable: false,
                 searchTerm: searchTerm,
                 indentsAutomatically: false,
                 gutter: gutter,
                 onToggleFold: toggleFold,
                 wrapsLines: wrapsLines,
+                longestLineLength: projection.longestLineLength,
                 highlightedMatch: highlightedMatch
             )
             .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
