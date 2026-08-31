@@ -89,4 +89,34 @@ struct SidebarTargetingTests {
         #expect(model.pendingScrollTarget == model.selection)
         #expect(created.folder == ["Users", "Admin"])
     }
+
+    /// Opening a past send moves the editor to that request, so the sidebar has
+    /// to move with it -- otherwise the editor shows a request the tree is not
+    /// pointing at, somewhere off screen or inside a shut folder.
+    @Test func openingAHistoryEntryRevealsAndScrollsToItsRequest() async throws {
+        // Arrange -- the request is filed two folders deep, both shut
+        let (model, filed) = try await loadedModel()
+        model.toggleExpansion(folder: ["Users"])
+        model.toggleExpansion(folder: ["Users", "Admin"])
+        #expect(!model.isExpanded(folder: ["Users", "Admin"]))
+
+        let entry = HistoryEntry(
+            id: "h1",
+            projectID: model.projectID,
+            requestID: filed.id,
+            requestSnapshot: filed,
+            resolvedURL: "https://example.com/users/1/promote",
+            sentAt: Date()
+        )
+
+        // Act
+        model.open(historyEntry: entry)
+
+        // Assert -- the way to the row is open, and the sidebar was told to
+        // bring it into view
+        let target = SidebarSelection.request(projectID: model.projectID, requestID: filed.id)
+        #expect(model.isExpanded(folder: ["Users"]))
+        #expect(model.isExpanded(folder: ["Users", "Admin"]))
+        #expect(model.pendingScrollTarget == target)
+    }
 }

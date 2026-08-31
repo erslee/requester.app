@@ -316,8 +316,16 @@ final class AppModel {
         guard let requestID = entry.requestID else { return }
         let target = SidebarSelection.request(projectID: entry.projectID, requestID: requestID)
         isProjectCollapsed = false
+        // Whatever holds the request has to be open before the row can be
+        // selected at all, let alone scrolled to.
+        expand(folder: folder(ofRequest: requestID))
 
         historyPanel.selectedEntryID = entry.id
+        // A history entry can be for a request far down a long tree, or on the
+        // tab that is not in front. Moving the selection without bringing the
+        // row into view swaps the editor to something the sidebar is not
+        // showing.
+        pendingScrollTarget = target
 
         Task {
             // Read the body back out of its blob first, so opening a large
@@ -333,6 +341,12 @@ final class AppModel {
     }
 
     private var pendingHistoryEntry: HistoryEntry?
+
+    /// Where a request of this window's project is filed. Empty for one at the
+    /// top level, and for an id the project does not have.
+    private func folder(ofRequest requestID: String) -> [String] {
+        (requestsByProject[projectID] ?? []).first { $0.id == requestID }?.folder ?? []
+    }
 
     // MARK: - Selection
 
@@ -798,8 +812,7 @@ final class AppModel {
         guard let selection else { return [] }
         if let path = selection.folderPath { return path }
         guard let requestID = selection.requestID else { return [] }
-        return (requestsByProject[projectID] ?? [])
-            .first { $0.id == requestID }?.folder ?? []
+        return folder(ofRequest: requestID)
     }
 
     private func run(_ work: () async throws -> Void) async {
