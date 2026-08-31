@@ -26,6 +26,10 @@ struct CodeEditor: NSViewRepresentable {
     /// keeps one line to one gutter row.
     var wrapsLines: Bool = true
 
+    /// The search match the reader last jumped to. It is scrolled into view and
+    /// shaded apart from the others.
+    var highlightedMatch: NSRange?
+
     func makeNSView(context: Context) -> NSScrollView {
         let textView = NSTextView()
         textView.delegate = context.coordinator
@@ -69,7 +73,9 @@ struct CodeEditor: NSViewRepresentable {
         // already highlighted: TextKit asks the delegate for each paragraph as
         // it scrolls into view.
         textView.textContentStorage?.delegate = context.coordinator
-        context.coordinator.apply(options: options, searchTerm: searchTerm)
+        context.coordinator.apply(
+            options: options, searchTerm: searchTerm, highlightedMatch: highlightedMatch
+        )
         context.coordinator.onToggleFold = onToggleFold
         textView.string = text
         (scrollView.verticalRulerView as? LineNumberRuler)?.source = gutter
@@ -124,7 +130,9 @@ struct CodeEditor: NSViewRepresentable {
             }
         }
         context.coordinator.gutter = gutter
-        context.coordinator.apply(options: options, searchTerm: searchTerm)
+        context.coordinator.apply(
+            options: options, searchTerm: searchTerm, highlightedMatch: highlightedMatch
+        )
 
         // The gutter draws from the projection, so it is refreshed whenever the
         // text it numbers might have moved. Redrawing costs a screenful.
@@ -230,6 +238,7 @@ struct CodeEditor: NSViewRepresentable {
         /// consulted at all.
         private var options: SyntaxHighlighter.Options = .plain
         private var searchTerm = ""
+        private var highlightedMatch: NSRange?
 
         init(text: Binding<String>) {
             self.text = text
@@ -353,12 +362,23 @@ struct CodeEditor: NSViewRepresentable {
         // MARK: - Highlighting
 
         /// Adopts a new set of highlighting inputs, repainting what is on
-        /// screen only if they changed.
-        func apply(options: SyntaxHighlighter.Options, searchTerm: String) {
-            guard options != self.options || searchTerm != self.searchTerm else { return }
+        /// screen only if they changed, and revealing the match jumped to.
+        func apply(
+            options: SyntaxHighlighter.Options,
+            searchTerm: String,
+            highlightedMatch: NSRange? = nil
+        ) {
+            let jumped = highlightedMatch != self.highlightedMatch
+            guard jumped || options != self.options || searchTerm != self.searchTerm else { return }
             self.options = options
             self.searchTerm = searchTerm
+            self.highlightedMatch = highlightedMatch
             invalidateParagraphs()
+
+            if jumped, let match = highlightedMatch, let textView,
+               NSMaxRange(match) <= textView.textStorage?.length ?? 0 {
+                textView.scrollRangeToVisible(match)
+            }
         }
 
         /// Discards the cached paragraphs so TextKit asks for them again. The
@@ -398,12 +418,26 @@ extension CodeEditor.Coordinator: NSTextContentStorageDelegate {
         textParagraphWith range: NSRange
     ) -> NSTextParagraph? {
         guard let storage = textContentStorage.textStorage else { return nil }
+
+        // The jumped-to match is a position in the whole document; this
+        // paragraph only knows about its own span of it.
+        var current: NSRange?
+        if let match = highlightedMatch {
+            let overlap = NSIntersectionRange(match, range)
+            if overlap.length > 0 {
+                current = NSRange(
+                    location: overlap.location - range.location, length: overlap.length
+                )
+            }
+        }
+
         return NSTextParagraph(
             attributedString: SyntaxHighlighter.attributedParagraph(
                 for: storage.attributedSubstring(from: range).string,
                 options: options,
                 style: style,
-                searchTerm: searchTerm
+                searchTerm: searchTerm,
+                currentMatch: current
             )
         )
     }

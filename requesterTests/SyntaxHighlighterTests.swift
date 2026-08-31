@@ -198,6 +198,57 @@ struct SyntaxHighlighterTests {
         #expect(paragraph.attribute(.backgroundColor, at: 0, effectiveRange: nil) == nil)
     }
 
+    @Test func theJumpedToMatchIsShadedApartFromTheRest() {
+        // Arrange -- two hits on one line, the second one jumped to
+        let line = "alpha beta alpha"
+        let second = NSRange(location: 11, length: 5)
+
+        // Act
+        let paragraph = SyntaxHighlighter.attributedParagraph(
+            for: line, options: .plain, style: style, searchTerm: "alpha", currentMatch: second
+        )
+
+        // Assert -- the other match keeps the ordinary find shading
+        #expect(
+            paragraph.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor
+                == .findHighlightColor
+        )
+        #expect(
+            paragraph.attribute(.backgroundColor, at: 11, effectiveRange: nil) as? NSColor
+                == .currentFindHighlight
+        )
+        #expect(colour(paragraph, at: 11) == .currentFindHighlightText)
+    }
+
+    @Test func aParagraphWithoutTheCurrentMatchIsUnaffected() {
+        // Arrange / Act -- the match lives on some other line
+        let paragraph = SyntaxHighlighter.attributedParagraph(
+            for: "alpha", options: .plain, style: style, searchTerm: "alpha", currentMatch: nil
+        )
+
+        // Assert
+        #expect(
+            paragraph.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor
+                == .findHighlightColor
+        )
+    }
+
+    @Test func aCurrentMatchRunningPastTheLineIsIgnored() {
+        // Arrange / Act -- a stale jump target from a longer projection must
+        // not index off the end of a line that has since been reprojected
+        let paragraph = SyntaxHighlighter.attributedParagraph(
+            for: "alpha", options: .plain, style: style,
+            searchTerm: "alpha", currentMatch: NSRange(location: 3, length: 40)
+        )
+
+        // Assert -- it draws as an ordinary match rather than trapping
+        #expect(paragraph.string == "alpha")
+        #expect(
+            paragraph.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor
+                == .findHighlightColor
+        )
+    }
+
     // MARK: - Match ranges
 
     @Test func findsEveryOccurrenceOfTheTerm() {

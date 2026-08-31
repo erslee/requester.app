@@ -139,11 +139,15 @@ nonisolated enum SyntaxHighlighter {
     /// view asks for a paragraph only as it scrolls into view, so the cost
     /// tracks the size of the window rather than the size of the response.
     /// `line` carries its own paragraph separator, which no pattern matches.
+    /// - Parameter currentMatch: the one match the reader last jumped to,
+    ///   relative to this line, shaded apart from the others so it is obvious
+    ///   where Enter landed.
     static func attributedParagraph(
         for line: String,
         options: Options,
         style: Style,
-        searchTerm: String = ""
+        searchTerm: String = "",
+        currentMatch: NSRange? = nil
     ) -> NSAttributedString {
         let styled = NSMutableAttributedString(string: line)
         let fullRange = NSRange(location: 0, length: styled.length)
@@ -164,6 +168,17 @@ nonisolated enum SyntaxHighlighter {
         for match in matchRanges(of: searchTerm, in: line as NSString, range: fullRange) {
             styled.addAttribute(
                 .backgroundColor, value: NSColor.findHighlightColor, range: match
+            )
+        }
+
+        if let currentMatch, NSMaxRange(currentMatch) <= styled.length {
+            styled.addAttribute(
+                .backgroundColor, value: NSColor.currentFindHighlight, range: currentMatch
+            )
+            // The colouring underneath would otherwise leave a green string or
+            // a purple keyword sitting on orange.
+            styled.addAttribute(
+                .foregroundColor, value: NSColor.currentFindHighlightText, range: currentMatch
             )
         }
 
@@ -206,4 +221,10 @@ nonisolated extension NSColor {
     static let graphQLVariable = NSColor(srgbRed: 0.05, green: 0.58, blue: 0.62, alpha: 1)
     static let graphQLDirective = NSColor(srgbRed: 0.78, green: 0.24, blue: 0.53, alpha: 1)
     static let comment = NSColor.secondaryLabelColor
+
+    // The match Enter last jumped to. Every browser's find bar separates the
+    // current hit from the rest this way, and the pair is fixed rather than
+    // system-derived so the contrast holds in both appearances.
+    static let currentFindHighlight = NSColor(srgbRed: 1.00, green: 0.58, blue: 0.00, alpha: 1)
+    static let currentFindHighlightText = NSColor(srgbRed: 0.10, green: 0.08, blue: 0.00, alpha: 1)
 }

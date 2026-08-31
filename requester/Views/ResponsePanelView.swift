@@ -12,10 +12,15 @@ struct ResponsePanelView: View {
     @State private var isSearching = false
     @State private var format: BodyFormat = .pretty
 
-    /// How many times the search term occurs in the body. Counting means
-    /// scanning the whole thing, so it is state settled after a pause in
-    /// typing rather than a property recomputed on every redraw.
-    @State private var matchSummary = ""
+    /// Where the search term occurs in the body. Finding them means scanning
+    /// the whole thing, so it is state settled after a pause in typing rather
+    /// than a property recomputed on every redraw.
+    @State private var matches: [NSRange] = []
+
+    /// Which of `matches` Enter last landed on.
+    @State private var currentMatch = 0
+
+    @FocusState private var isSearchFieldFocused: Bool
 
     /// The body indexed for display: formatted text, where its lines start, and
     /// which of them open a block. Built when the response or the format
@@ -93,7 +98,7 @@ struct ResponsePanelView: View {
         }
         .padding(12)
         .onChange(of: entry?.id) { searchTerm = "" }
-        .task(id: MatchQuery(term: searchTerm, body: projection.text)) { await countMatches() }
+        .task(id: MatchQuery(term: searchTerm, body: projection.text)) { await findMatches() }
         .onChange(of: bodyText, initial: true) { reformat() }
         .onChange(of: format) { reformat() }
     }
@@ -121,9 +126,7 @@ struct ResponsePanelView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button {
-                        isSearching.toggle()
-                    } label: {
+                    Button(action: focusSearchField) {
                         Image(systemName: "magnifyingglass")
                     }
                     .buttonStyle(.plain)
@@ -172,8 +175,12 @@ struct ResponsePanelView: View {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("Search response body…", text: $searchTerm)
                 .textFieldStyle(.plain)
+                .focused($isSearchFieldFocused)
+                .onSubmit(advanceToNextMatch)
             if !matchSummary.isEmpty {
-                Text(matchSummary).font(.caption).foregroundStyle(.secondary)
+                Text(matchSummary)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
             Button {
                 isSearching = false
@@ -188,6 +195,33 @@ struct ResponsePanelView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(.quinary, in: RoundedRectangle(cornerRadius: 6))
+        .onAppear { isSearchFieldFocused = true }
+    }
+
+    /// Command-F opens the bar and puts the caret in it -- and does the same
+    /// when it is already open, which is what a reader who has scrolled away
+    /// from the field expects.
+    private func focusSearchField() {
+        isSearching = true
+        isSearchFieldFocused = true
+    }
+
+    /// Enter walks the matches, wrapping round at the end.
+    private func advanceToNextMatch() {
+        guard !matches.isEmpty else { return }
+        currentMatch = (currentMatch + 1) % matches.count
+    }
+
+    private var matchSummary: String {
+        guard !searchTerm.isEmpty else { return "" }
+        guard !matches.isEmpty else { return "No matches" }
+        return "\(currentMatch + 1) of \(matches.count)"
+    }
+
+    /// The match to reveal, guarded because the search runs behind the typing
+    /// and the list can be replaced between one redraw and the next.
+    private var highlightedMatch: NSRange? {
+        matches.indices.contains(currentMatch) ? matches[currentMatch] : nil
     }
 
     /// The term and the text it is counted in. Comparing two bodies is a
@@ -198,12 +232,13 @@ struct ResponsePanelView: View {
         var body: String
     }
 
-    /// Waits for typing to settle, then counts off the main actor. The
+    /// Waits for typing to settle, then scans off the main actor. The
     /// highlighting in the text view does not go through here -- it is applied
-    /// per visible line and is always current; this only feeds the label.
-    private func countMatches() async {
+    /// per visible line and is always current; this feeds the label and Enter.
+    private func findMatches() async {
         guard !searchTerm.isEmpty else {
-            matchSummary = ""
+            matches = []
+            currentMatch = 0
             return
         }
 
@@ -212,15 +247,16 @@ struct ResponsePanelView: View {
 
         let term = searchTerm
         let body = projection.text
-        let count = await Task.detached {
+        let found = await Task.detached {
             let text = body as NSString
             return SyntaxHighlighter.matchRanges(
                 of: term, in: text, range: NSRange(location: 0, length: text.length)
-            ).count
+            )
         }.value
 
         guard !Task.isCancelled else { return }
-        matchSummary = count == 1 ? "1 match" : "\(count) matches"
+        matches = found
+        currentMatch = 0
     }
 
     /// A minified response arrives as one enormous line, which is unreadable and
@@ -276,7 +312,8 @@ struct ResponsePanelView: View {
                 indentsAutomatically: false,
                 gutter: gutter,
                 onToggleFold: toggleFold,
-                wrapsLines: wrapsLines
+                wrapsLines: wrapsLines,
+                highlightedMatch: highlightedMatch
             )
             .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
 
