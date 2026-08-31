@@ -1,6 +1,21 @@
 import AppKit
+import CoreGraphics
 import Testing
 @testable import requester
+
+/// Whether AppKit can actually lay views out here.
+///
+/// Laying out a text view and tiling a scroll view needs a window server. The
+/// CI runner's unit-test job has none -- it is a headless virtual machine, and
+/// the attempt aborts the whole test process, taking every unrelated suite
+/// down with it. So the geometry below is checked where a person can also look
+/// at it, and skipped where it cannot run at all.
+private enum ViewLayout {
+    static var isAvailable: Bool {
+        ProcessInfo.processInfo.environment["CI"] == nil
+            && CGSessionCopyCurrentDictionary() != nil
+    }
+}
 
 /// Where the response body's text actually lands once the line-number gutter
 /// has taken its width.
@@ -12,6 +27,7 @@ import Testing
 /// so the text arrived clipped -- the first characters of each line hidden,
 /// and a one-character line gone altogether. None of that shows in the text
 /// itself; it is purely where the views ended up, so it is measured here.
+@Suite(.enabled(if: ViewLayout.isAvailable))
 @MainActor
 struct GutterGeometryTests {
     /// The editor as `CodeEditor` assembles it, showing a numbered body long
