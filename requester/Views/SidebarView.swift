@@ -32,22 +32,32 @@ struct SidebarView: View {
         // The reader is what brings a newly created request on screen;
         // `scrollTo` needs the rows to carry ids, which mirror their tags.
         ScrollViewReader { proxy in
-            list
-                .onChange(of: model.pendingScrollTarget) { _, target in
-                    guard let target else { return }
-                    withAnimation { proxy.scrollTo(target, anchor: .center) }
-                    model.pendingScrollTarget = nil
-                }
+            VStack(spacing: 0) {
+                tabStrip
+                Divider()
+                lists
+            }
+            .onChange(of: model.pendingScrollTarget) { _, target in
+                guard let target else { return }
+                // A row can only be scrolled to on the tab that draws it, and
+                // the only thing that scrolls is a newly created request.
+                model.sidebarTab = .project
+                withAnimation { proxy.scrollTo(target, anchor: .center) }
+                model.pendingScrollTarget = nil
+            }
         }
     }
 
-    private var list: some View {
-        List(selection: $model.selection) {
-            ForEach(model.projectList) { project in
-                rows(for: project)
+    /// Whichever tab is showing, under the shared bottom bar -- the new-request
+    /// button and the filter belong to the sidebar, not to one list.
+    @ViewBuilder
+    private var lists: some View {
+        Group {
+            switch model.sidebarTab {
+            case .project: list
+            case .favorites: favoritesList
             }
         }
-        .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .onChange(of: model.filterFocusRequests) { isFilterFocused = true }
         .sheet(item: $model.specSummary) { summary in
@@ -97,6 +107,88 @@ struct SidebarView: View {
                 Task { await model.deleteFolder(folder) }
             }
             Button("Cancel", role: .cancel) { deleteFolderTarget = nil }
+        }
+    }
+
+    private var list: some View {
+        List(selection: $model.selection) {
+            ForEach(model.projectList) { project in
+                rows(for: project)
+            }
+        }
+        .listStyle(.sidebar)
+    }
+
+    // MARK: - Tabs
+
+    /// Xcode's navigator strip: one sidebar, a row of icons deciding what it
+    /// lists. Two tabs today -- the project's tree, and what has been starred
+    /// out of it.
+    private var tabStrip: some View {
+        HStack(spacing: 2) {
+            ForEach(SidebarTab.allCases) { tab in
+                let isSelected = model.sidebarTab == tab
+                Button {
+                    model.sidebarTab = tab
+                } label: {
+                    Image(systemName: tab.symbol(isSelected: isSelected))
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 28, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .background {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 5).fill(.quaternary)
+                    }
+                }
+                .help(tab.title)
+                .accessibilityLabel(tab.title)
+                .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.bar)
+    }
+
+    /// Starred requests, flat and in project order -- a jump list rather than a
+    /// second tree. Where each one is filed is written beside it, since the
+    /// folder it sits in is the context the tree would have given.
+    private var favoritesList: some View {
+        List(selection: $model.selection) {
+            ForEach(model.favoriteRequests) { request in
+                let tag = SidebarSelection.request(
+                    projectID: model.projectID, requestID: request.id
+                )
+                requestRow(request, in: model.projectID, inFavoritesTab: true)
+                    .tag(tag)
+                    .id(tag)
+                    .contextMenu {
+                        requestMenu(projectID: model.projectID, requestID: request.id)
+                    }
+            }
+        }
+        .listStyle(.sidebar)
+        .overlay {
+            if model.favoriteRequests.isEmpty { favoritesPlaceholder }
+        }
+    }
+
+    /// An empty tab has to say which emptiness it is: nothing starred yet, or
+    /// everything starred hidden by what is typed in the filter.
+    private var favoritesPlaceholder: some View {
+        ContentUnavailableView {
+            Label("No Favorites", systemImage: "bookmark")
+        } description: {
+            Text(
+                model.hasFavorites
+                    ? "No favorite matches the filter."
+                    : "Right-click a request and choose Add to Favorites."
+            )
         }
     }
 
@@ -327,8 +419,12 @@ struct SidebarView: View {
         .padding(.vertical, 2)
     }
 
+    /// One request row, on either tab. The Favorites tab draws the same row
+    /// with where the request is filed written after it -- on the Project tab
+    /// the tree already says that, and a star says what the tab itself says.
     private func requestRow(
-        _ request: APIRequest, in projectID: String, depth: Int = 0
+        _ request: APIRequest, in projectID: String, depth: Int = 0,
+        inFavoritesTab: Bool = false
     ) -> some View {
         let isDirty = model.editor.isDirty && model.editor.draft?.id == request.id
         let isRemoved = request.spec?.isRemoved == true
@@ -350,6 +446,24 @@ struct SidebarView: View {
                     .fill(.tint)
                     .frame(width: 6, height: 6)
                     .help("Unsaved changes")
+            }
+
+            if request.isFavorite && !inFavoritesTab {
+                Image(systemName: "bookmark.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tint)
+                    .help("A favorite")
+            }
+
+            if inFavoritesTab && !request.folder.isEmpty {
+                Spacer(minLength: 8)
+                // Truncated from the front: the folder a request sits *in* is
+                // the end of its path, which is the half worth keeping.
+                Text(request.folder.joined(separator: " ▸ "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
             }
         }
         // Dimmed rather than disabled: the endpoint is gone from the document,
@@ -391,6 +505,11 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func requestMenu(projectID: String, requestID: String) -> some View {
+        let isFavorite = model.isFavorite(requestID: requestID)
+        Button(isFavorite ? "Remove from Favorites" : "Add to Favorites") {
+            Task { await model.toggleFavorite(projectID: projectID, requestID: requestID) }
+        }
+        Divider()
         Button("Rename Request…") {
             renameTarget = .request(projectID: projectID, requestID: requestID)
         }

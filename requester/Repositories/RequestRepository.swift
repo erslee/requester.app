@@ -65,6 +65,18 @@ nonisolated struct RequestRepository: Sendable {
         return try await save(request)
     }
 
+    /// Stars or unstars one request. Returns `nil` when it is already in that
+    /// state, so the caller can skip a reload nothing changed.
+    func setFavorite(
+        projectID: String, requestID: String, _ isFavorite: Bool
+    ) async throws -> APIRequest? {
+        guard var request = try await get(projectID: projectID, requestID: requestID),
+              request.isFavorite != isFavorite
+        else { return nil }
+        request.isFavorite = isFavorite
+        return try await save(request)
+    }
+
     /// Re-parents a folder and everything under it, by rewriting the paths that
     /// start with `from`. Renaming and moving a folder are the same operation:
     /// only the last component differs.

@@ -26,6 +26,15 @@ project row is the drop target for "out of every folder". New Folder, Rename, an
 are on the right-click menu of a folder or the project. Where you file something is
 yours: a re-sync never moves a request you have put somewhere.
 
+**Favorites** — A tab strip sits at the top of the sidebar, Xcode-navigator style:
+the folder icon is the project's tree, the bookmark icon is everything you have starred.
+**Add to Favorites** is on the right-click menu of any request, and **⌘D** stars or
+unstars whichever request is selected. The Favorites tab lists them flat — method, name,
+and the folder each one is filed in — so it reads as a jump list rather than a second
+tree; starred requests carry a small bookmark in the project tree too. Being a favorite
+is stored on the request itself, so it travels with the data folder rather than staying
+on one machine. The filter at the bottom narrows both tabs.
+
 **Filter** — A filter field sits at the bottom of the sidebar, next to the new-request
 button. Typing narrows the list to requests whose name, URL, or method match; Escape
 clears it, **⇧⌘F** puts the cursor in it. The request you have open stays listed even
@@ -130,7 +139,8 @@ Everything is plain files:
 ```
 projects/<projectID>/project.json              project metadata + global headers
 projects/<projectID>/requests/<requestID>.json  one file per request (folder is a
-                                               path on the request, not a directory)
+                                               path on the request, not a directory;
+                                               so is the favorite flag)
 variables/<projectID>.json                      project variables
 history/<projectID>/YYYY-MM.jsonl               append-only, one line per send
 history/<projectID>/blobs/<entryID>.body        response bodies too large to inline

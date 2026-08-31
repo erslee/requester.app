@@ -124,6 +124,20 @@ nonisolated struct APIRequest: Codable, Sendable, Hashable, Identifiable {
         set { folderPath = newValue.isEmpty ? nil : newValue }
     }
 
+    /// Whether this request is starred, listed on the sidebar's Favorites tab.
+    ///
+    /// Optional for the same reason as `spec` and `folderPath` above -- a
+    /// non-optional field would stop every request file written before this
+    /// existed from decoding. `nil` and `false` mean the same thing.
+    var favorite: Bool?
+
+    /// The flag as the rest of the app wants it. Clearing writes `nil` rather
+    /// than `false`, so unstarring leaves the file as it was before.
+    var isFavorite: Bool {
+        get { favorite ?? false }
+        set { favorite = newValue ? true : nil }
+    }
+
     var order: Int = 0
     var createdAt: Date
     var updatedAt: Date
@@ -159,6 +173,9 @@ nonisolated struct APIRequest: Codable, Sendable, Hashable, Identifiable {
         // an operation removed must not light up the editor's unsaved-changes
         // dot on a request the user has not touched.
         copy.spec = nil
+        // Starring is the same kind of bookkeeping: it is written straight to
+        // disk from the sidebar, and must not make an open draft look unsaved.
+        copy.favorite = nil
         return copy
     }
 }

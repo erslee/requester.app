@@ -712,6 +712,53 @@ final class AppModel {
         return allVisibleRequests.count - visibleRequests(in: projectID).count
     }
 
+    // MARK: - Favorites
+
+    /// Which sidebar list is on screen.
+    ///
+    /// Held in memory rather than remembered across launches, like the filter:
+    /// which way you are looking at a project right now is not something a
+    /// window should still be doing to you tomorrow.
+    var sidebarTab: SidebarTab = .project
+
+    /// The starred requests, in the order the project lists them.
+    ///
+    /// Built from `visibleRequests` rather than the raw list, so the filter
+    /// field at the bottom of the sidebar narrows this tab exactly as it
+    /// narrows the tree, and a removed endpoint stays hidden here too.
+    var favoriteRequests: [APIRequest] {
+        visibleRequests(in: projectID).filter(\.isFavorite)
+    }
+
+    /// Whether the Favorites tab has anything to show at all, ignoring the
+    /// filter -- an empty tab needs to say which of the two emptinesses it is.
+    var hasFavorites: Bool {
+        allVisibleRequests.contains { $0.isFavorite }
+    }
+
+    func isFavorite(requestID: String) -> Bool {
+        (requestsByProject[projectID] ?? []).first { $0.id == requestID }?.isFavorite == true
+    }
+
+    /// Stars or unstars one request, writing straight to its file.
+    ///
+    /// The open draft is patched too, the way a rename is: `save` writes the
+    /// whole draft, so a draft still carrying the old flag would undo this the
+    /// next time autosave ran.
+    func toggleFavorite(projectID: String, requestID: String) async {
+        let starred = !isFavorite(requestID: requestID)
+        await write {
+            guard try await self.requests.setFavorite(
+                projectID: projectID, requestID: requestID, starred
+            ) != nil else { return }
+            if self.editor.draft?.id == requestID { self.editor.draft?.isFavorite = starred }
+            await self.reloadRequests(projectID: projectID)
+        }
+    }
+
+    /// The request the Favorites menu command acts on: whatever is selected.
+    var selectedRequestID: String? { selection?.requestID }
+
     // MARK: - Global headers
 
     /// Replaces the headers every request in the project inherits.

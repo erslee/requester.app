@@ -78,7 +78,26 @@ struct RequesterApp: App {
             Button("Filter Requests…") { focusedModel?.focusFilter() }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled(focusedModel == nil)
+
+            // Acts on the selected request, so the title says which way it
+            // will go rather than making the user read the sidebar first.
+            Button(favoriteCommandTitle) {
+                guard let model = focusedModel, let requestID = model.selectedRequestID
+                else { return }
+                Task { await model.toggleFavorite(
+                    projectID: model.projectID, requestID: requestID
+                ) }
+            }
+            .keyboardShortcut("d", modifiers: .command)
+            .disabled(focusedModel?.selectedRequestID == nil)
         }
+    }
+
+    private var favoriteCommandTitle: String {
+        guard let model = focusedModel, let requestID = model.selectedRequestID,
+              model.isFavorite(requestID: requestID)
+        else { return "Add to Favorites" }
+        return "Remove from Favorites"
     }
 
     private func newProject() {
