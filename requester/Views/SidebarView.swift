@@ -50,13 +50,16 @@ struct SidebarView: View {
 
     /// Whichever tab is showing, under the shared bottom bar -- the new-request
     /// button and the filter belong to the sidebar, not to one list.
+    ///
+    /// Both lists are built and kept, with the one not in front hidden rather
+    /// than removed. A `switch` here would destroy the scroll view holding the
+    /// offset, so coming back to a tab would land at the top of it; hiding
+    /// leaves AppKit to keep each list exactly where it was left.
     @ViewBuilder
     private var lists: some View {
-        Group {
-            switch model.sidebarTab {
-            case .project: list
-            case .favorites: favoritesList
-            }
+        ZStack {
+            tab(.project) { list }
+            tab(.favorites) { favoritesList }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .onChange(of: model.filterFocusRequests) { isFilterFocused = true }
@@ -153,6 +156,20 @@ struct SidebarView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(.bar)
+    }
+
+    /// One tab's list, shown or held out of the way.
+    ///
+    /// Hidden all three ways it has to be: invisible, untouchable, and out of
+    /// the accessibility tree -- a list that still answered to VoiceOver or to
+    /// a UI test query would make every request in the window appear twice.
+    @ViewBuilder
+    private func tab(_ which: SidebarTab, @ViewBuilder content: () -> some View) -> some View {
+        let isShowing = model.sidebarTab == which
+        content()
+            .opacity(isShowing ? 1 : 0)
+            .allowsHitTesting(isShowing)
+            .accessibilityHidden(!isShowing)
     }
 
     /// Starred requests, flat and in project order -- a jump list rather than a
