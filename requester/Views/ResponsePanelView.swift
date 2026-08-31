@@ -17,9 +17,21 @@ struct ResponsePanelView: View {
     /// typing rather than a property recomputed on every redraw.
     @State private var matchSummary = ""
 
-    /// The body as shown. Reformatting a large body is not cheap, so it is done
-    /// when the response or the format changes rather than on every redraw.
-    @State private var displayedBody = ""
+    /// The body indexed for display: formatted text, where its lines start, and
+    /// which of them open a block. Built when the response or the format
+    /// changes rather than on every redraw, because it walks the whole body.
+    @State private var document = FoldableText.plain("")
+
+    /// Source lines whose blocks are collapsed.
+    @State private var folded: Set<Int> = []
+
+    /// `document` with `folded` applied -- what the text view actually holds,
+    /// and what the gutter numbers from.
+    @State private var projection = FoldableText.plain("").projected(folding: [])
+
+    /// Long lines run off to the side rather than wrapping, so one line of the
+    /// response is always one row in the gutter.
+    @State private var wrapsLines = false
 
     private enum BodyFormat: String, CaseIterable, Identifiable {
         case pretty = "Pretty"
@@ -61,6 +73,19 @@ struct ResponsePanelView: View {
                     .fixedSize()
                 }
 
+                if selectedTab == .body {
+                    Toggle(isOn: $wrapsLines) {
+                        Image(systemName: "text.append")
+                    }
+                    .toggleStyle(.button)
+                    .disabled(!canUnwrap)
+                    .help(
+                        canUnwrap
+                            ? "Wrap long lines"
+                            : "This body has a line too long to show unwrapped"
+                    )
+                }
+
                 Spacer()
             }
 
@@ -68,7 +93,7 @@ struct ResponsePanelView: View {
         }
         .padding(12)
         .onChange(of: entry?.id) { searchTerm = "" }
-        .task(id: MatchQuery(term: searchTerm, body: displayedBody)) { await countMatches() }
+        .task(id: MatchQuery(term: searchTerm, body: projection.text)) { await countMatches() }
         .onChange(of: bodyText, initial: true) { reformat() }
         .onChange(of: format) { reformat() }
     }
@@ -186,7 +211,7 @@ struct ResponsePanelView: View {
         guard !Task.isCancelled else { return }
 
         let term = searchTerm
-        let body = displayedBody
+        let body = projection.text
         let count = await Task.detached {
             let text = body as NSString
             return SyntaxHighlighter.matchRanges(
@@ -200,10 +225,41 @@ struct ResponsePanelView: View {
 
     /// A minified response arrives as one enormous line, which is unreadable and
     /// also the worst case for text layout. Pretty is therefore the default.
+    ///
+    /// One pass produces the text, its line index and its fold points together;
+    /// the raw view skips the formatting but still gets line numbers.
     private func reformat() {
-        displayedBody = format == .pretty
-            ? JSONFormatter.prettyPrintedIfJSON(bodyText)
-            : bodyText
+        document = format == .pretty && looksLikeJSON
+            ? FoldableText.json(bodyText)
+            : FoldableText.plain(bodyText)
+        folded = []
+        reproject()
+    }
+
+    private func reproject() {
+        projection = document.projected(folding: folded)
+    }
+
+    /// Collapses or expands the block opening on `line`.
+    private func toggleFold(at line: Int) {
+        if folded.contains(line) { folded.remove(line) } else { folded.insert(line) }
+        reproject()
+    }
+
+    /// A single enormous line -- a minified body in the raw view -- is wrapped
+    /// whatever the toggle says, so the toggle is disabled rather than ignored.
+    private var canUnwrap: Bool {
+        CodeEditor.canUnwrap(longestLineLength: projection.longestLineLength)
+    }
+
+    private var gutter: LineNumberRuler.Source {
+        .init(
+            document: document,
+            projection: projection,
+            folded: folded,
+            // Nothing in a header list or an unformatted body opens a block.
+            showsFoldControls: selectedTab == .body && format == .pretty && looksLikeJSON
+        )
     }
 
     // MARK: - Content
@@ -213,11 +269,14 @@ struct ResponsePanelView: View {
         switch selectedTab {
         case .body:
             CodeEditor(
-                text: .constant(displayedBody),
+                text: .constant(projection.text),
                 options: .init(json: looksLikeJSON),
                 isEditable: false,
                 searchTerm: searchTerm,
-                indentsAutomatically: false
+                indentsAutomatically: false,
+                gutter: gutter,
+                onToggleFold: toggleFold,
+                wrapsLines: wrapsLines
             )
             .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
 

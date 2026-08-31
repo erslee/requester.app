@@ -15,6 +15,17 @@ struct CodeEditor: NSViewRepresentable {
     /// Carries indentation onto the next line, and outdents a closing bracket.
     var indentsAutomatically: Bool = true
 
+    /// Line numbers and fold triangles down the left. Nil -- the default, and
+    /// what every editable editor uses -- shows no gutter at all.
+    var gutter: LineNumberRuler.Source?
+
+    /// Called with the source line whose fold triangle was clicked.
+    var onToggleFold: ((Int) -> Void)?
+
+    /// Off means long lines scroll sideways instead of wrapping, which is what
+    /// keeps one line to one gutter row.
+    var wrapsLines: Bool = true
+
     func makeNSView(context: Context) -> NSScrollView {
         let textView = NSTextView()
         textView.delegate = context.coordinator
@@ -30,14 +41,23 @@ struct CodeEditor: NSViewRepresentable {
         textView.drawsBackground = false
         textView.autoresizingMask = [.width]
         textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.textContainer?.widthTracksTextView = true
 
         let scrollView = NSScrollView()
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
+        Self.setWraps(wrapsLines, width: unwrappedWidth, on: textView, in: scrollView)
+
+        if gutter != nil {
+            let ruler = LineNumberRuler(scrollView: scrollView)
+            ruler.onToggleFold = { [weak coordinator = context.coordinator] line in
+                coordinator?.onToggleFold?(line)
+            }
+            scrollView.verticalRulerView = ruler
+            scrollView.hasVerticalRuler = true
+            scrollView.rulersVisible = true
+        }
         for axis in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
             scrollView.setContentHuggingPriority(.defaultLow, for: axis)
             scrollView.setContentCompressionResistancePriority(.defaultLow, for: axis)
@@ -50,7 +70,9 @@ struct CodeEditor: NSViewRepresentable {
         // it scrolls into view.
         textView.textContentStorage?.delegate = context.coordinator
         context.coordinator.apply(options: options, searchTerm: searchTerm)
+        context.coordinator.onToggleFold = onToggleFold
         textView.string = text
+        (scrollView.verticalRulerView as? LineNumberRuler)?.source = gutter
         return scrollView
     }
 
@@ -82,20 +104,94 @@ struct CodeEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.text = $text
         context.coordinator.indentsAutomatically = indentsAutomatically
+        context.coordinator.onToggleFold = onToggleFold
         textView.isEditable = isEditable
         textView.allowsUndo = isEditable
+        Self.setWraps(wrapsLines, width: unwrappedWidth, on: textView, in: scrollView)
 
         // Only push text in when it changed outside the editor (a request was
-        // loaded, a curl command imported) -- otherwise typing would fight
-        // with the binding and reset the cursor.
+        // loaded, a curl command imported, a block was collapsed) -- otherwise
+        // typing would fight with the binding and reset the cursor.
         if textView.string != text {
             let selection = textView.selectedRange()
-            textView.string = text
-            textView.setSelectedRange(
-                NSRange(location: min(selection.location, text.utf16.count), length: 0)
-            )
+            // Collapsing a block is an edit to one region, not a new document.
+            // Applying it as one keeps the reader where they were.
+            if !context.coordinator.applyFold(to: gutter, in: textView) {
+                textView.string = text
+                textView.setSelectedRange(
+                    NSRange(location: min(selection.location, text.utf16.count), length: 0)
+                )
+            }
         }
+        context.coordinator.gutter = gutter
         context.coordinator.apply(options: options, searchTerm: searchTerm)
+
+        // The gutter draws from the projection, so it is refreshed whenever the
+        // text it numbers might have moved. Redrawing costs a screenful.
+        (scrollView.verticalRulerView as? LineNumberRuler)?.source = gutter
+    }
+
+    /// Beyond this, a line is wrapped whatever the caller asked for. Only the
+    /// minified case reaches it -- a whole body on one line, which would mean a
+    /// text view tens of millions of points wide. A bounded container stays
+    /// lazy at any width short of that, so the limit is deliberately far above
+    /// anything a formatted response produces.
+    static let widestUnwrappedLine: CGFloat = 1_000_000
+
+    /// Turns wrapping on or off without giving up viewport layout.
+    ///
+    /// The container's width must stay **bounded**. Handing it
+    /// `greatestFiniteMagnitude` -- the conventional recipe for a non-wrapping
+    /// text view -- makes TextKit lay out every paragraph in the document to
+    /// discover how wide the widest one is: measured at 3.3 seconds for a 2 MB
+    /// response, against 4 ms. So the container keeps tracking the text view,
+    /// and the *text view* is widened instead, to a width the caller already
+    /// knows from its line index.
+    ///
+    /// Nothing here assigns `container.size` or asks the text view to size
+    /// itself to its text. Both would make TextKit measure the whole document,
+    /// and the first also fights the tracking that derives the container width
+    /// from the view's -- they disagree by the text container inset, so every
+    /// update would overwrite what the last layout pass had just worked out.
+    private static func setWraps(
+        _ wraps: Bool, width contentWidth: CGFloat,
+        on textView: NSTextView, in scrollView: NSScrollView
+    ) {
+        guard let container = textView.textContainer else { return }
+        let wrapped = wraps || contentWidth > widestUnwrappedLine
+        let width = wrapped
+            ? scrollView.contentSize.width
+            : max(contentWidth, scrollView.contentSize.width)
+
+        guard textView.isHorizontallyResizable == wrapped
+            || abs(textView.frame.width - width) > 0.5
+        else { return }
+
+        container.widthTracksTextView = true
+        textView.isHorizontallyResizable = false
+        // A wrapped view follows the scroll view's width; a widened one must
+        // not be pulled back to it on the next resize.
+        textView.autoresizingMask = wrapped ? [.width] : []
+        textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+        scrollView.hasHorizontalScroller = !wrapped
+    }
+
+    /// Width the text needs when it is not wrapped. The editors are monospaced,
+    /// so the longest line's character count is the document's width -- no
+    /// layout required to find it.
+    static func unwrappedWidth(longestLineLength: Int) -> CGFloat {
+        CGFloat(longestLineLength) * font.maximumAdvancement.width + 24
+    }
+
+    /// Whether a document with this longest line can be shown unwrapped at all,
+    /// so a Wrap control can be disabled rather than appear to do nothing.
+    static func canUnwrap(longestLineLength: Int) -> Bool {
+        unwrappedWidth(longestLineLength: longestLineLength) <= widestUnwrappedLine
+    }
+
+    private var unwrappedWidth: CGFloat {
+        guard let gutter else { return 0 }
+        return Self.unwrappedWidth(longestLineLength: gutter.projection.longestLineLength)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -115,6 +211,12 @@ struct CodeEditor: NSViewRepresentable {
 
         var text: Binding<String>
         var indentsAutomatically = true
+        var onToggleFold: ((Int) -> Void)?
+
+        /// The projection currently on screen, so a reprojection can be applied
+        /// as an edit to the region it changed.
+        var gutter: LineNumberRuler.Source?
+
         weak var textView: NSTextView?
 
         /// Fonts resolved once, since every paragraph scrolling into view is
@@ -226,6 +328,26 @@ struct CodeEditor: NSViewRepresentable {
             if indent.hasSuffix(indentUnit) { return String(indent.dropLast(indentUnit.count)) }
             if indent.hasSuffix("\t") { return String(indent.dropLast()) }
             return ""
+        }
+
+        // MARK: - Folding
+
+        /// Applies a fold as an edit to the region it changed, returning false
+        /// when the text did not come from the same document and has to be
+        /// swapped wholesale instead.
+        func applyFold(to gutter: LineNumberRuler.Source?, in textView: NSTextView) -> Bool {
+            guard let gutter, let previous = self.gutter,
+                  previous.document.id == gutter.document.id,
+                  let contentStorage = textView.textContentStorage,
+                  let storage = contentStorage.textStorage,
+                  let edit = gutter.projection.difference(from: previous.projection),
+                  NSMaxRange(edit.range) <= storage.length
+            else { return false }
+
+            contentStorage.performEditingTransaction {
+                storage.replaceCharacters(in: edit.range, with: edit.replacement)
+            }
+            return true
         }
 
         // MARK: - Highlighting
