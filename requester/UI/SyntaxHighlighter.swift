@@ -118,58 +118,78 @@ nonisolated enum SyntaxHighlighter {
         }
     }
 
-    /// Applies highlighting to every line of `storage`, plus optional
-    /// highlighting of search matches on top.
-    static func apply(
-        to storage: NSTextStorage,
-        options: Options,
-        font: NSFont,
-        baseColor: NSColor = .labelColor,
-        searchTerm: String = ""
-    ) {
-        let text = storage.string
-        let fullRange = NSRange(location: 0, length: storage.length)
+    /// Fonts and colours resolved once. A paragraph is styled every time it
+    /// scrolls into view, and the bold-font lookup alone costs about a
+    /// millisecond per screenful if it is repeated per line.
+    struct Style {
+        let font: NSFont
+        let boldFont: NSFont
+        let baseColor: NSColor
 
-        storage.beginEditing()
-        storage.setAttributes([.font: font, .foregroundColor: baseColor], range: fullRange)
-        storage.removeAttribute(.backgroundColor, range: fullRange)
+        init(font: NSFont, baseColor: NSColor = .labelColor) {
+            self.font = font
+            self.boldFont = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+            self.baseColor = baseColor
+        }
+    }
+
+    /// One line, attributed and ready to hand back to TextKit as a paragraph.
+    ///
+    /// Highlighting is deliberately per-line rather than per-document: the text
+    /// view asks for a paragraph only as it scrolls into view, so the cost
+    /// tracks the size of the window rather than the size of the response.
+    /// `line` carries its own paragraph separator, which no pattern matches.
+    static func attributedParagraph(
+        for line: String,
+        options: Options,
+        style: Style,
+        searchTerm: String = ""
+    ) -> NSAttributedString {
+        let styled = NSMutableAttributedString(string: line)
+        let fullRange = NSRange(location: 0, length: styled.length)
+        styled.setAttributes(
+            [.font: style.font, .foregroundColor: style.baseColor], range: fullRange
+        )
 
         if options.highlightsAnything {
-            let boldFont = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
-            (text as NSString).enumerateSubstrings(
-                in: fullRange, options: .byLines
-            ) { line, lineRange, _, _ in
-                guard let line else { return }
-                for span in spans(in: line, options: options) {
-                    let absolute = NSRange(
-                        location: lineRange.location + span.range.location,
-                        length: span.range.length
-                    )
-                    guard NSMaxRange(absolute) <= storage.length else { continue }
-                    storage.addAttribute(.foregroundColor, value: span.color, range: absolute)
-                    if span.isBold {
-                        storage.addAttribute(.font, value: boldFont, range: absolute)
-                    }
+            for span in spans(in: line, options: options) {
+                guard NSMaxRange(span.range) <= styled.length else { continue }
+                styled.addAttribute(.foregroundColor, value: span.color, range: span.range)
+                if span.isBold {
+                    styled.addAttribute(.font, value: style.boldFont, range: span.range)
                 }
             }
         }
 
-        if !searchTerm.isEmpty {
-            var searchRange = fullRange
-            while searchRange.length > 0 {
-                let found = (text as NSString).range(
-                    of: searchTerm, options: .caseInsensitive, range: searchRange
-                )
-                guard found.location != NSNotFound else { break }
-                storage.addAttribute(
-                    .backgroundColor, value: NSColor.findHighlightColor, range: found
-                )
-                let next = NSMaxRange(found)
-                searchRange = NSRange(location: next, length: fullRange.length - next)
-            }
+        for match in matchRanges(of: searchTerm, in: line as NSString, range: fullRange) {
+            styled.addAttribute(
+                .backgroundColor, value: NSColor.findHighlightColor, range: match
+            )
         }
 
-        storage.endEditing()
+        return styled
+    }
+
+    /// Every case-insensitive occurrence of `term` within `range`.
+    ///
+    /// Shared by the per-line highlighting and by the match counter above the
+    /// body, so what is counted is exactly what is painted. An empty term
+    /// matches nothing rather than everything.
+    static func matchRanges(
+        of term: String, in text: NSString, range: NSRange
+    ) -> [NSRange] {
+        guard !term.isEmpty else { return [] }
+
+        var matches: [NSRange] = []
+        var searchRange = range
+        while searchRange.length > 0 {
+            let found = text.range(of: term, options: .caseInsensitive, range: searchRange)
+            guard found.location != NSNotFound else { break }
+            matches.append(found)
+            let next = NSMaxRange(found)
+            searchRange = NSRange(location: next, length: NSMaxRange(range) - next)
+        }
+        return matches
     }
 }
 

@@ -20,7 +20,7 @@ struct CodeEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.isEditable = isEditable
         textView.isRichText = false
-        textView.allowsUndo = true
+        textView.allowsUndo = isEditable
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
@@ -44,8 +44,13 @@ struct CodeEditor: NSViewRepresentable {
         }
 
         context.coordinator.textView = textView
+
+        // Installed before any text is set, so the very first layout pass is
+        // already highlighted: TextKit asks the delegate for each paragraph as
+        // it scrolls into view.
+        textView.textContentStorage?.delegate = context.coordinator
+        context.coordinator.apply(options: options, searchTerm: searchTerm)
         textView.string = text
-        context.coordinator.rehighlight(options: options, searchTerm: searchTerm)
         return scrollView
     }
 
@@ -78,6 +83,7 @@ struct CodeEditor: NSViewRepresentable {
         context.coordinator.text = $text
         context.coordinator.indentsAutomatically = indentsAutomatically
         textView.isEditable = isEditable
+        textView.allowsUndo = isEditable
 
         // Only push text in when it changed outside the editor (a request was
         // loaded, a curl command imported) -- otherwise typing would fight
@@ -89,7 +95,7 @@ struct CodeEditor: NSViewRepresentable {
                 NSRange(location: min(selection.location, text.utf16.count), length: 0)
             )
         }
-        context.coordinator.rehighlight(options: options, searchTerm: searchTerm)
+        context.coordinator.apply(options: options, searchTerm: searchTerm)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -111,18 +117,17 @@ struct CodeEditor: NSViewRepresentable {
         var indentsAutomatically = true
         weak var textView: NSTextView?
 
-        /// What the current attributes were computed from. `updateNSView` runs
-        /// on every surrounding state change -- a send starting, a tab
-        /// switching -- and re-attributing a large response body each time is
-        /// wasted work on the main thread.
-        private struct Inputs: Equatable {
-            var length: Int
-            var hash: Int
-            var options: SyntaxHighlighter.Options
-            var searchTerm: String
-        }
+        /// Fonts resolved once, since every paragraph scrolling into view is
+        /// styled through them.
+        private let style = SyntaxHighlighter.Style(font: CodeEditor.font)
 
-        private var lastInputs: Inputs?
+        /// What paragraphs are currently being styled with. `updateNSView` runs
+        /// on every surrounding state change -- a send starting, a tab
+        /// switching -- so re-styling is triggered only when one of these two
+        /// actually differs. Both are cheap to compare; the document is not
+        /// consulted at all.
+        private var options: SyntaxHighlighter.Options = .plain
+        private var searchTerm = ""
 
         init(text: Binding<String>) {
             self.text = text
@@ -223,25 +228,62 @@ struct CodeEditor: NSViewRepresentable {
             return ""
         }
 
-        func rehighlight(options: SyntaxHighlighter.Options, searchTerm: String) {
-            guard let storage = textView?.textStorage else { return }
+        // MARK: - Highlighting
 
-            let inputs = Inputs(
-                length: storage.length,
-                hash: storage.string.hashValue,
-                options: options,
-                searchTerm: searchTerm
-            )
-            guard inputs != lastInputs else { return }
-            lastInputs = inputs
-
-            SyntaxHighlighter.apply(
-                to: storage,
-                options: options,
-                font: CodeEditor.font,
-                searchTerm: searchTerm
-            )
+        /// Adopts a new set of highlighting inputs, repainting what is on
+        /// screen only if they changed.
+        func apply(options: SyntaxHighlighter.Options, searchTerm: String) {
+            guard options != self.options || searchTerm != self.searchTerm else { return }
+            self.options = options
+            self.searchTerm = searchTerm
+            invalidateParagraphs()
         }
+
+        /// Discards the cached paragraphs so TextKit asks for them again. The
+        /// document is marked as having changed attributes rather than content,
+        /// which leaves the text, the selection and the undo stack alone.
+        ///
+        /// Only the visible paragraphs are rebuilt, however large the document.
+        private func invalidateParagraphs() {
+            guard let textView,
+                  let contentStorage = textView.textContentStorage,
+                  let storage = contentStorage.textStorage,
+                  let layoutManager = textView.textLayoutManager
+            else { return }
+
+            contentStorage.performEditingTransaction {
+                storage.edited(
+                    .editedAttributes,
+                    range: NSRange(location: 0, length: storage.length),
+                    changeInLength: 0
+                )
+            }
+            layoutManager.invalidateLayout(for: layoutManager.documentRange)
+        }
+    }
+}
+
+/// Supplies each paragraph already highlighted, as TextKit asks for it.
+///
+/// This is what keeps a large response cheap: the delegate is called for the
+/// paragraphs being laid out -- a screenful -- rather than for the whole
+/// document, so the cost of highlighting tracks the window and not the body.
+/// Nothing here may touch `NSTextView.layoutManager`, which would drop the view
+/// back to TextKit 1 and force a full-document layout.
+extension CodeEditor.Coordinator: NSTextContentStorageDelegate {
+    func textContentStorage(
+        _ textContentStorage: NSTextContentStorage,
+        textParagraphWith range: NSRange
+    ) -> NSTextParagraph? {
+        guard let storage = textContentStorage.textStorage else { return nil }
+        return NSTextParagraph(
+            attributedString: SyntaxHighlighter.attributedParagraph(
+                for: storage.attributedSubstring(from: range).string,
+                options: options,
+                style: style,
+                searchTerm: searchTerm
+            )
+        )
     }
 }
 

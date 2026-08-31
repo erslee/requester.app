@@ -12,6 +12,11 @@ struct ResponsePanelView: View {
     @State private var isSearching = false
     @State private var format: BodyFormat = .pretty
 
+    /// How many times the search term occurs in the body. Counting means
+    /// scanning the whole thing, so it is state settled after a pause in
+    /// typing rather than a property recomputed on every redraw.
+    @State private var matchSummary = ""
+
     /// The body as shown. Reformatting a large body is not cheap, so it is done
     /// when the response or the format changes rather than on every redraw.
     @State private var displayedBody = ""
@@ -63,6 +68,7 @@ struct ResponsePanelView: View {
         }
         .padding(12)
         .onChange(of: entry?.id) { searchTerm = "" }
+        .task(id: MatchQuery(term: searchTerm, body: displayedBody)) { await countMatches() }
         .onChange(of: bodyText, initial: true) { reformat() }
         .onChange(of: format) { reformat() }
     }
@@ -141,7 +147,7 @@ struct ResponsePanelView: View {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("Search response body…", text: $searchTerm)
                 .textFieldStyle(.plain)
-            if !searchTerm.isEmpty {
+            if !matchSummary.isEmpty {
                 Text(matchSummary).font(.caption).foregroundStyle(.secondary)
             }
             Button {
@@ -159,9 +165,37 @@ struct ResponsePanelView: View {
         .background(.quinary, in: RoundedRectangle(cornerRadius: 6))
     }
 
-    private var matchSummary: String {
-        let count = displayedBody.ranges(of: searchTerm).count
-        return count == 1 ? "1 match" : "\(count) matches"
+    /// The term and the text it is counted in. Comparing two bodies is a
+    /// buffer comparison, so using one as part of a task identity is cheap
+    /// even when the response is megabytes long.
+    private struct MatchQuery: Equatable {
+        var term: String
+        var body: String
+    }
+
+    /// Waits for typing to settle, then counts off the main actor. The
+    /// highlighting in the text view does not go through here -- it is applied
+    /// per visible line and is always current; this only feeds the label.
+    private func countMatches() async {
+        guard !searchTerm.isEmpty else {
+            matchSummary = ""
+            return
+        }
+
+        try? await Task.sleep(for: .milliseconds(150))
+        guard !Task.isCancelled else { return }
+
+        let term = searchTerm
+        let body = displayedBody
+        let count = await Task.detached {
+            let text = body as NSString
+            return SyntaxHighlighter.matchRanges(
+                of: term, in: text, range: NSRange(location: 0, length: text.length)
+            ).count
+        }.value
+
+        guard !Task.isCancelled else { return }
+        matchSummary = count == 1 ? "1 match" : "\(count) matches"
     }
 
     /// A minified response arrives as one enormous line, which is unreadable and

@@ -119,4 +119,143 @@ struct SyntaxHighlighterTests {
         #expect(SyntaxHighlighter.Options.plain.highlightsAnything == false)
         #expect(painted("query { a }", options: .plain).isEmpty)
     }
+
+    // MARK: - Paragraphs
+
+    /// The text view is handed one attributed line at a time, so what it draws
+    /// is whatever `attributedParagraph` puts on that line -- these assert
+    /// against the attributes themselves rather than against the spans.
+    private let style = SyntaxHighlighter.Style(font: .monospacedSystemFont(
+        ofSize: NSFont.systemFontSize, weight: .regular
+    ))
+
+    private func colour(
+        _ paragraph: NSAttributedString, at index: Int
+    ) -> NSColor? {
+        paragraph.attribute(.foregroundColor, at: index, effectiveRange: nil) as? NSColor
+    }
+
+    @Test func aParagraphCarriesTheColoursItsSpansDescribe() {
+        // Arrange
+        let line = #"  "name": "Tatooine","#
+
+        // Act
+        let paragraph = SyntaxHighlighter.attributedParagraph(
+            for: line, options: .init(json: true), style: style
+        )
+
+        // Assert -- indentation stays base-coloured, the key and value do not
+        #expect(paragraph.string == line)
+        #expect(colour(paragraph, at: 0) == .labelColor)
+        #expect(colour(paragraph, at: line.firstIndexOf(#""name""#)) == .jsonKey)
+        #expect(colour(paragraph, at: line.firstIndexOf(#""Tatooine""#)) == .jsonString)
+    }
+
+    @Test func aParagraphKeepsItsTrailingNewlineUnhighlighted() {
+        // Arrange / Act -- TextKit hands over the paragraph separator too
+        let paragraph = SyntaxHighlighter.attributedParagraph(
+            for: "  true\n", options: .init(json: true), style: style
+        )
+
+        // Assert
+        #expect(paragraph.string == "  true\n")
+        #expect(colour(paragraph, at: 2) == .jsonKeyword)
+        #expect(colour(paragraph, at: paragraph.length - 1) == .labelColor)
+    }
+
+    @Test func plainOptionsLeaveTheWholeParagraphBaseColoured() {
+        // Arrange / Act
+        let paragraph = SyntaxHighlighter.attributedParagraph(
+            for: #"{"a": 1}"#, options: .plain, style: style
+        )
+
+        // Assert
+        var runs = 0
+        paragraph.enumerateAttribute(
+            .foregroundColor, in: NSRange(location: 0, length: paragraph.length)
+        ) { _, _, _ in runs += 1 }
+        #expect(runs == 1)
+        #expect(colour(paragraph, at: 0) == .labelColor)
+    }
+
+    @Test func searchMatchesAreShadedOnTopOfHighlighting() {
+        // Arrange
+        let line = #"  "name": "Tatooine","#
+
+        // Act
+        let paragraph = SyntaxHighlighter.attributedParagraph(
+            for: line, options: .init(json: true), style: style, searchTerm: "tatooine"
+        )
+
+        // Assert -- the match is shaded case-insensitively, and the JSON
+        // colouring underneath it survives
+        let at = line.firstIndexOf("Tatooine")
+        #expect(
+            paragraph.attribute(.backgroundColor, at: at, effectiveRange: nil) as? NSColor
+                == .findHighlightColor
+        )
+        #expect(colour(paragraph, at: at) == .jsonString)
+        #expect(paragraph.attribute(.backgroundColor, at: 0, effectiveRange: nil) == nil)
+    }
+
+    // MARK: - Match ranges
+
+    @Test func findsEveryOccurrenceOfTheTerm() {
+        // Arrange
+        let text = "alpha beta ALPHA gamma alpha" as NSString
+
+        // Act
+        let matches = SyntaxHighlighter.matchRanges(
+            of: "alpha", in: text, range: NSRange(location: 0, length: text.length)
+        )
+
+        // Assert -- case-insensitive, and each one located
+        #expect(matches.count == 3)
+        #expect(matches.map(\.location) == [0, 11, 23])
+    }
+
+    @Test func matchesDoNotOverlapEachOther() {
+        // Arrange
+        let text = "aaaa" as NSString
+
+        // Act -- a search resumes after the match it just found
+        let matches = SyntaxHighlighter.matchRanges(
+            of: "aa", in: text, range: NSRange(location: 0, length: text.length)
+        )
+
+        // Assert
+        #expect(matches.map(\.location) == [0, 2])
+    }
+
+    @Test func matchesStayInsideTheRangeAsked() {
+        // Arrange
+        let text = "alpha beta alpha" as NSString
+
+        // Act
+        let matches = SyntaxHighlighter.matchRanges(
+            of: "alpha", in: text, range: NSRange(location: 5, length: text.length - 5)
+        )
+
+        // Assert -- the occurrence before the range is not reported
+        #expect(matches.map(\.location) == [11])
+    }
+
+    @Test func anEmptyTermMatchesNothing() {
+        // Arrange
+        let text = "alpha" as NSString
+
+        // Act / Assert -- an empty find field must not shade the whole body
+        #expect(
+            SyntaxHighlighter.matchRanges(
+                of: "", in: text, range: NSRange(location: 0, length: text.length)
+            ).isEmpty
+        )
+    }
+}
+
+private extension String {
+    /// UTF-16 offset of `needle`, for indexing into the attributed paragraph.
+    func firstIndexOf(_ needle: String) -> Int {
+        (self as NSString).range(of: needle).location
+    }
 }
