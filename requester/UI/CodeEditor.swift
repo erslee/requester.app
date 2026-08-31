@@ -78,6 +78,7 @@ struct CodeEditor: NSViewRepresentable {
         )
         context.coordinator.onToggleFold = onToggleFold
         textView.string = text
+        context.coordinator.displayedText = text
         (scrollView.verticalRulerView as? LineNumberRuler)?.source = gutter
         return scrollView
     }
@@ -118,7 +119,7 @@ struct CodeEditor: NSViewRepresentable {
         // Only push text in when it changed outside the editor (a request was
         // loaded, a curl command imported, a block was collapsed) -- otherwise
         // typing would fight with the binding and reset the cursor.
-        if textView.string != text {
+        if text != context.coordinator.displayedText {
             let selection = textView.selectedRange()
             // Collapsing a block is an edit to one region, not a new document.
             // Applying it as one keeps the reader where they were.
@@ -128,6 +129,7 @@ struct CodeEditor: NSViewRepresentable {
                     NSRange(location: min(selection.location, text.utf16.count), length: 0)
                 )
             }
+            context.coordinator.displayedText = text
         }
         context.coordinator.gutter = gutter
         context.coordinator.apply(
@@ -221,8 +223,25 @@ struct CodeEditor: NSViewRepresentable {
         var indentsAutomatically = true
         var onToggleFold: ((Int) -> Void)?
 
-        /// The projection currently on screen, so a reprojection can be applied
-        /// as an edit to the region it changed.
+        /// What the text view is showing, as the caller last handed it over.
+        ///
+        /// The check that decides whether to push new text compares against
+        /// this rather than against `NSTextView.string`. That property is a
+        /// Swift `String` lazily bridged from the storage's
+        /// `NSBigMutableString`, and comparing a bridged string with a native
+        /// one cannot use `memcmp`: Swift falls back to a Unicode-normalising
+        /// walk, one `-[NSBigMutableString characterAtIndex:]` message per
+        /// character. On a megabyte response that is seconds of main-thread
+        /// work -- and `updateNSView` runs on every SwiftUI update, including
+        /// the one AppKit raises when the window becomes active, which is why
+        /// switching back to the app used to hang.
+        ///
+        /// Held as the very value the caller passed, so the usual case is the
+        /// same instance twice and the comparison is a pointer check.
+        var displayedText = ""
+
+        /// The projection currently on screen, needed to read a scroll position
+        /// as a line of the original and to put it back afterwards.
         var gutter: LineNumberRuler.Source?
 
         weak var textView: NSTextView?
@@ -246,7 +265,11 @@ struct CodeEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
-            text.wrappedValue = textView.string
+            // The same instance goes into the binding and into `displayedText`,
+            // so the next update compares them by pointer.
+            let typed = textView.string
+            displayedText = typed
+            text.wrappedValue = typed
         }
 
         // MARK: - Indentation
