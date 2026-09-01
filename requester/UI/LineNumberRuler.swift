@@ -101,7 +101,12 @@ final class LineNumberRuler: NSRulerView {
     ///
     /// Only the horizontal offset is touched: the row the reader is on is
     /// worth keeping, the column they never chose is not.
-    private func returnToStartOfLine() {
+    ///
+    /// Not private: a gutter switched off and back on again -- Raw, then
+    /// Pretty -- re-takes its inset without ever changing thickness, so the
+    /// install path has to ask for this rather than reaching it through a
+    /// re-tile.
+    func returnToStartOfLine() {
         guard let clipView = scrollView?.contentView else { return }
         let start = -clipView.contentInsets.left
         guard abs(clipView.bounds.origin.x - start) > 0.5 else { return }

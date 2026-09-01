@@ -187,8 +187,21 @@ struct CodeEditor: NSViewRepresentable {
             ruler.onToggleFold = onToggleFold
             scrollView.verticalRulerView = ruler
         }
+
+        let wasHidden = !scrollView.rulersVisible
         scrollView.rulersVisible = true
-        (scrollView.verticalRulerView as? LineNumberRuler)?.source = gutter
+        let ruler = scrollView.verticalRulerView as? LineNumberRuler
+        ruler?.source = gutter
+
+        // Showing the rulers again re-takes the gutter's width as a left inset
+        // on the clip view, but the document is still at the offset it had
+        // while there was none -- which is now the position where the gutter
+        // covers the start of every line. The ruler survives the round trip
+        // with its thickness unchanged, so nothing on the re-tile path puts it
+        // back. Only the transition does this: a reader who has scrolled
+        // sideways through an unwrapped body must not be dragged to column 0
+        // by an ordinary redraw.
+        if wasHidden { ruler?.returnToStartOfLine() }
     }
 
     /// Beyond this, a line is wrapped whatever the caller asked for. Only the

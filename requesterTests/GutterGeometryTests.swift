@@ -99,4 +99,44 @@ struct GutterGeometryTests {
         #expect(scrollView.rulersVisible == false)
         #expect(scrollView.contentView.contentInsets.left == 0)
     }
+
+    /// Raw and back again. The gutter returns at the width it already had, so
+    /// nothing on the re-tile path notices -- but the room for it is taken
+    /// back as a left inset, and a document still sitting at the offset it
+    /// used while there was no gutter is now underneath one.
+    @Test func restoringTheGutterPutsTheDocumentBackAtTheStartOfItsLines() throws {
+        // Arrange -- shown, dropped for the raw view
+        let scrollView = makeEditor(lines: 400)
+        let thickness = try ruler(of: scrollView).ruleThickness
+        CodeEditor.syncGutter(nil, on: scrollView, onToggleFold: { _ in })
+        scrollView.layoutSubtreeIfNeeded()
+
+        // Act -- and back to pretty, the same document and the same gutter
+        CodeEditor.syncGutter(gutterSource(of: scrollView), on: scrollView, onToggleFold: { _ in })
+        scrollView.layoutSubtreeIfNeeded()
+
+        // Assert
+        let clipView = scrollView.contentView
+        #expect(try ruler(of: scrollView).ruleThickness == thickness)
+        #expect(clipView.contentInsets.left == thickness)
+        #expect(clipView.bounds.origin.x == -clipView.contentInsets.left)
+
+        // ...and the way a reader would check it.
+        let textView = try #require(scrollView.documentView as? NSTextView)
+        #expect(textView.convert(NSPoint.zero, to: scrollView).x >= thickness)
+    }
+
+    /// The same source the panel would hand back, rebuilt from the text on
+    /// screen rather than kept from before -- which is what switching the
+    /// format does.
+    private func gutterSource(of scrollView: NSScrollView) -> LineNumberRuler.Source {
+        let text = (scrollView.documentView as? NSTextView)?.string ?? ""
+        let document = FoldableText.plain(text)
+        return .init(
+            document: document,
+            projection: document.projected(folding: []),
+            folded: [],
+            showsFoldControls: false
+        )
+    }
 }
