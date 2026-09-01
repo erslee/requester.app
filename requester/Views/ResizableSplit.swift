@@ -31,39 +31,45 @@ struct ResizableSplit<First: View, Second: View>: View {
     @State private var fraction: CGFloat?
     @State private var fractionAtDragStart: CGFloat?
 
+    /// The drag is measured against the split's own container rather than the
+    /// divider it is attached to. A `.local` space moves with the divider, so
+    /// each event was measured from an origin the previous event had already
+    /// shifted -- the translation collapsed back to zero and the divider
+    /// juddered between two positions for as long as the mouse kept moving.
+    /// The name is per-instance so nesting one split inside another cannot make
+    /// the inner gesture resolve against the outer container.
+    @Namespace private var container
+
     var body: some View {
         GeometryReader { proxy in
             let total = axis == .horizontal ? proxy.size.width : proxy.size.height
-            let available = max(total - Self.dividerThickness, 1)
-            let firstSize = resolvedFirstSize(in: available)
-            let secondSize = max(available - firstSize, 0)
+            let geometry = SplitGeometry(
+                available: total - Self.dividerThickness,
+                minimumFirst: minimumFirst,
+                minimumSecond: minimumSecond
+            )
+            let firstSize = geometry.firstSize(fraction: fraction ?? initialFraction)
+            let secondSize = max(geometry.available - firstSize, 0)
 
             switch axis {
             case .horizontal:
                 HStack(spacing: 0) {
                     first.frame(width: firstSize)
-                    divider(available: available)
+                    divider(in: geometry)
                     second.frame(width: secondSize)
                 }
             case .vertical:
                 VStack(spacing: 0) {
                     first.frame(height: firstSize)
-                    divider(available: available)
+                    divider(in: geometry)
                     second.frame(height: secondSize)
                 }
             }
         }
+        .coordinateSpace(.named(container))
     }
 
-    /// Clamped so neither pane drops below its minimum, and so a window too
-    /// small for both minimums still yields finite, ordered sizes.
-    private func resolvedFirstSize(in available: CGFloat) -> CGFloat {
-        let desired = available * (fraction ?? initialFraction)
-        let highest = max(available - minimumSecond, minimumFirst)
-        return min(max(desired, min(minimumFirst, available)), max(highest, 1))
-    }
-
-    private func divider(available: CGFloat) -> some View {
+    private func divider(in geometry: SplitGeometry) -> some View {
         ZStack {
             Color.clear
             Divider()
@@ -78,15 +84,66 @@ struct ResizableSplit<First: View, Second: View>: View {
             if isInside { cursor.push() } else { NSCursor.pop() }
         }
         .gesture(
-            DragGesture(minimumDistance: 1)
+            DragGesture(minimumDistance: 1, coordinateSpace: .named(container))
                 .onChanged { value in
-                    let start = fractionAtDragStart ?? (fraction ?? initialFraction)
-                    if fractionAtDragStart == nil { fractionAtDragStart = start }
-                    let moved = available * start
+                    // A drag resumes from where the divider actually is. The
+                    // stored fraction can name a position the minimums
+                    // overruled, and starting there would spend the first part
+                    // of the drag closing that gap instead of moving.
+                    let start = fractionAtDragStart
+                        ?? geometry.reachableFraction(fraction ?? initialFraction)
+                    fractionAtDragStart = start
+                    let moved = geometry.available * start
                         + (axis == .horizontal ? value.translation.width : value.translation.height)
-                    fraction = min(max(moved / available, 0), 1)
+                    fraction = geometry.fraction(forFirstSize: moved)
                 }
                 .onEnded { _ in fractionAtDragStart = nil }
         )
+    }
+}
+
+/// Where the divider may sit, for a split of a given size.
+///
+/// Split out from the view because it is the whole of the layout's behaviour
+/// and none of it needs a window: every position is clamped to the range the
+/// two minimums leave reachable, so what is stored and what is on screen can
+/// never disagree.
+nonisolated struct SplitGeometry: Equatable {
+    /// The space the two panes share, the divider already taken out of it.
+    let available: CGFloat
+    let minimumFirst: CGFloat
+    let minimumSecond: CGFloat
+
+    init(available: CGFloat, minimumFirst: CGFloat, minimumSecond: CGFloat) {
+        // A container too small for the divider alone would otherwise divide
+        // by zero and hand the panes a NaN width.
+        self.available = max(available, 1)
+        self.minimumFirst = minimumFirst
+        self.minimumSecond = minimumSecond
+    }
+
+    /// The size of the first pane for a stored fraction.
+    func firstSize(fraction: CGFloat) -> CGFloat {
+        clamped(available * fraction)
+    }
+
+    /// The fraction to store for a divider dragged to `size`.
+    func fraction(forFirstSize size: CGFloat) -> CGFloat {
+        clamped(size) / available
+    }
+
+    /// `fraction` moved to the nearest position the minimums actually allow.
+    func reachableFraction(_ fraction: CGFloat) -> CGFloat {
+        self.fraction(forFirstSize: available * fraction)
+    }
+
+    /// Ordered by construction, so a container too small for both minimums
+    /// still yields sizes that fit inside it -- the first pane taking what
+    /// there is rather than overflowing to satisfy its minimum.
+    private var smallestFirst: CGFloat { min(minimumFirst, available) }
+    private var largestFirst: CGFloat { max(available - minimumSecond, smallestFirst) }
+
+    private func clamped(_ size: CGFloat) -> CGFloat {
+        min(max(size, smallestFirst), largestFirst)
     }
 }
