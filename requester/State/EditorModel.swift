@@ -22,8 +22,9 @@ final class EditorModel {
     /// Surfaced as an alert; a failed save or send should say so.
     var errorMessage: String?
 
-    /// Shown briefly after a curl import so silently-dropped flags are visible.
-    var curlImportNotice: String?
+    /// Shown briefly after a curl import or export -- on the way in so
+    /// silently-dropped flags are visible, on the way out to confirm the copy.
+    var curlNotice: String?
 
     private static let autosaveDelay = Duration.milliseconds(700)
     private var autosaveTask: Task<Void, Never>?
@@ -156,7 +157,7 @@ final class EditorModel {
         draft?.formFields = parsed.formFields
         if let graphQL = parsed.graphQLBody { draft?.graphQLBody = graphQL }
         draft?.auth = parsed.auth
-        curlImportNotice = parsed.unsupported.isEmpty
+        curlNotice = parsed.unsupported.isEmpty
             ? "Imported curl command."
             : "Imported curl command. Ignored: \(parsed.unsupported.joined(separator: ", "))"
     }

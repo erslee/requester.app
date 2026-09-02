@@ -45,8 +45,8 @@ struct CodeEditor: NSViewRepresentable {
     /// Static, and free of the coordinator and of SwiftUI, so the geometry it
     /// produces -- where the text begins once a gutter has taken its width --
     /// can be built and measured in a test.
-    static func makeScrollView(isEditable: Bool) -> (NSScrollView, NSTextView) {
-        let textView = NSTextView()
+    static func makeScrollView(isEditable: Bool) -> (NSScrollView, PastingTextView) {
+        let textView = PastingTextView()
         textView.isEditable = isEditable
         textView.isRichText = false
         textView.allowsUndo = isEditable
@@ -76,6 +76,7 @@ struct CodeEditor: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let (scrollView, textView) = Self.makeScrollView(isEditable: isEditable)
         textView.delegate = context.coordinator
+        textView.repairsPastedJSON = options.json
         Self.setWraps(wrapsLines, width: unwrappedWidth, on: textView, in: scrollView)
 
         context.coordinator.textView = textView
@@ -119,9 +120,11 @@ struct CodeEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? NSTextView else { return }
+        guard let textView = scrollView.documentView as? PastingTextView else { return }
         context.coordinator.text = $text
         context.coordinator.indentsAutomatically = indentsAutomatically
+        // The body's type picker can switch to JSON while the editor is open.
+        textView.repairsPastedJSON = options.json
         context.coordinator.onToggleFold = onToggleFold
         textView.isEditable = isEditable
         textView.allowsUndo = isEditable
@@ -487,6 +490,36 @@ struct CodeEditor: NSViewRepresentable {
             }
             layoutManager.invalidateLayout(for: layoutManager.documentRange)
         }
+    }
+}
+
+/// An `NSTextView` that tidies up what is pasted into it.
+///
+/// The text people have to hand for a JSON body is very often not JSON: it has
+/// been copied out of a console log or a debugger, and arrives as a JavaScript
+/// object literal. Repairing it here rather than behind a button means it is
+/// already right by the time it is read back, and there is no second step to
+/// forget.
+///
+/// A subclass because `paste(_:)` is the only place that knows a paste is what
+/// happened. `NSTextViewDelegate` sees the insertion, but not that the text
+/// came from the pasteboard -- and typing a `{` must not trigger any of this.
+final class PastingTextView: NSTextView {
+    /// Set by `CodeEditor` for the editors whose content is JSON: the raw body
+    /// when its type is JSON, and the GraphQL variables box.
+    var repairsPastedJSON = false
+
+    override func paste(_ sender: Any?) {
+        guard repairsPastedJSON,
+              let pasted = NSPasteboard.general.string(forType: .string),
+              let repaired = RelaxedJSON.repaired(pasted)
+        else { return super.paste(sender) }
+
+        // Inserted rather than assigned, so it lands at the insertion point,
+        // replaces the selection, and is a single undo step like any other
+        // paste. `RelaxedJSON` returns nil for anything it cannot make sense
+        // of, so the fall-through above is the normal path.
+        insertText(repaired, replacementRange: selectedRange())
     }
 }
 

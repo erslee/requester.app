@@ -87,6 +87,16 @@ struct RequestEditorView: View {
                     importCurlIfNeeded(newValue)
                 }
 
+            // Next to Send, because it exports the same thing Send would put on
+            // the wire -- global headers folded in, `{{variables}}` resolved.
+            Button {
+                model.copyDraftAsCurl()
+            } label: {
+                Label("Copy as curl", systemImage: "doc.on.doc")
+            }
+            .labelStyle(.iconOnly)
+            .help("Copy this request as a curl command")
+
             Button {
                 Task { await editor.send() }
             } label: {
@@ -169,7 +179,7 @@ struct RequestEditorView: View {
 
     @ViewBuilder
     private var curlNotice: some View {
-        if let notice = editor.curlImportNotice {
+        if let notice = editor.curlNotice {
             Text(notice)
                 .font(.caption)
                 .padding(.horizontal, 10)
@@ -178,7 +188,7 @@ struct RequestEditorView: View {
                 .overlay(Capsule().strokeBorder(.quaternary))
                 .task(id: notice) {
                     try? await Task.sleep(for: .seconds(6))
-                    editor.curlImportNotice = nil
+                    editor.curlNotice = nil
                 }
                 .transition(.move(edge: .top).combined(with: .opacity))
         }

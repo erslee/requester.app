@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Root observable state for one window: the wired dependency graph, the
@@ -305,6 +306,35 @@ final class AppModel {
     func variables(forProject projectID: String) -> [Variable] {
         (variablesByProject[projectID] ?? [:]).values
             .sorted { $0.key.localizedStandardCompare($1.key) == .orderedAscending }
+    }
+
+    // MARK: - Export
+
+    /// Puts the open request on the clipboard as a runnable `curl` command.
+    ///
+    /// Lives here rather than on `EditorModel` because only this model holds
+    /// both halves of what a send adds to a draft: the project's global headers
+    /// and its variable values. Preparing the request the same way
+    /// `HistoryService` does -- merge, then resolve -- is what makes the copied
+    /// command reach the same place Send would.
+    func copyDraftAsCurl() {
+        guard let draft = editor.draft else { return }
+        let merged = HeaderMerge.apply(
+            projectList.first { $0.id == draft.projectID }?.globalHeaders ?? [],
+            to: draft.normalized
+        )
+        let values = (variablesByProject[draft.projectID] ?? [:]).mapValues(\.value)
+
+        do {
+            let command = try CurlExporter.command(
+                for: VariableResolver.resolve(merged, with: values)
+            )
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+            editor.curlNotice = "Copied as curl."
+        } catch {
+            editor.errorMessage = error.localizedDescription
+        }
     }
 
     // MARK: - History

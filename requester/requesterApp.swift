@@ -90,6 +90,14 @@ struct RequesterApp: App {
             }
             .keyboardShortcut("d", modifiers: .command)
             .disabled(focusedModel?.selectedRequestID == nil)
+
+            Divider()
+            // Acts on the request in the editor rather than the sidebar
+            // selection: the export carries unsaved edits, which only the
+            // draft has.
+            Button("Copy as curl") { focusedModel?.copyDraftAsCurl() }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(focusedModel?.editor.draft == nil)
         }
     }
 

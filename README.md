@@ -72,11 +72,29 @@ quoting is handled the way bash handles it, including `$'…'` ANSI-C strings (w
 Chrome's *Copy as cURL* emits), so escapes and Unicode arrive intact. A JSON body
 carrying a `query` is recognised as GraphQL and lands in the GraphQL tab.
 
+Pasting a JavaScript object literal into a JSON body turns it into JSON — bare keys get
+quoted, single quotes become double, trailing commas and comments go. Console output and
+debugger dumps are usable as they were copied:
+
+```js
+{ projectId: '708000c9', units: [ 'A1.2a' ], /* note */ }
+```
+
+Nothing is changed unless the result parses, so a paste this cannot make sense of arrives
+verbatim.
+
 Exported collection files (v2.1 collection JSON) import as a project, via
 **File → Import Collection… (⇧⌘I)** or the sidebar button: requests, headers, query
 params, auth, bodies, collection variables, and post-response test scripts, whose
 host-specific API calls are translated to this app's. Anything that can't be
 represented is reported in a summary rather than dropped silently.
+
+**Export** — The terminal button next to *Send*, or **Edit → Copy as curl (⇧⌘C)**, puts
+the open request on the clipboard as a `curl` command. It is built from the very request
+that would be sent: query params folded into the URL, the project's global headers merged
+in, auth expanded into a real header, `{{variables}}` resolved, and the body encoded for
+its mode — so the command runs as pasted. (Which also means it carries whatever secrets
+the variables hold.)
 
 **Response viewer** — JSON syntax highlighting, pretty/raw toggle, and find-in-body.
 Minified responses are reformatted for reading, including ones truncated for display.
@@ -114,11 +132,12 @@ xcodebuild -project requester.xcodeproj -scheme requester \
            -destination 'platform=macOS' test
 ```
 
-104 unit tests (Swift Testing) covering the curl and collection importers, shell quoting,
-variable resolution, request building, history storage and reconciliation, the JSON
-formatter, syntax highlighting, auto-indent, the script runner, and the full
-send→persist→script→variables pipeline against a stubbed network layer. Plus 5 UI
-tests that drive the real app.
+291 unit tests (Swift Testing) covering the curl importer and exporter (which are tested
+against each other, so the two cannot drift), shell quoting, the relaxed-JSON paste
+repair, collection import, variable resolution, request building, history storage and
+reconciliation, the JSON formatter, syntax highlighting, auto-indent, the script runner,
+and the full send→persist→script→variables pipeline against a stubbed network layer.
+Plus 7 UI tests that drive the real app.
 
 ---
 
@@ -172,8 +191,9 @@ State/                @Observable models. AppModel (projects, selection),
                       filters), InterfaceStateStore (restored sidebar state)
 
 Domain/               Pure logic, no UI: HTTPExecutor, VariableResolver,
-                      HistoryService, ScriptRunner, CurlParser, ShellTokenizer,
-                      JSONFormatter, RequestNaming, and the collection importer
+                      HistoryService, ScriptRunner, CurlParser, CurlExporter,
+                      ShellTokenizer, JSONFormatter, RelaxedJSON,
+                      RequestNaming, and the collection importer
 
 Repositories/         CRUD over the storage backend: projects, requests,
                       variables, history (+ streaming history query)
