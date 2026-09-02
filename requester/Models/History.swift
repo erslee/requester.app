@@ -49,6 +49,14 @@ nonisolated struct HistoryEntry: Codable, Sendable, Hashable, Identifiable {
     var timeMilliseconds: Double = 0
     var scriptResult: ScriptResult?
 
+    /// Where this send's time went, stage by stage.
+    ///
+    /// On the entry rather than on `response`, because a send that failed has
+    /// no response at all -- and a connection that timed out after thirty
+    /// seconds is exactly the one whose timeline is worth reading. Optional so
+    /// every entry written before this existed still decodes.
+    var timeline: RequestTimeline?
+
     init(
         id: String,
         projectID: String,

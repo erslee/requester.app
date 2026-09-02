@@ -118,7 +118,10 @@ struct ContentView: View {
                 RequestEditorView(model: model, editor: model.editor)
             } second: {
                 ResponsePanelView(
-                    entry: model.editor.lastEntry, isSending: model.editor.isSending
+                    entry: model.editor.lastEntry,
+                    isSending: model.editor.isSending,
+                    liveStage: model.editor.liveStage,
+                    sendStartedAt: model.editor.sendStartedAt
                 )
             }
 

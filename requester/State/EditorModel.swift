@@ -19,6 +19,13 @@ final class EditorModel {
     var isSending = false
     var lastEntry: HistoryEntry?
 
+    /// The stage the send in flight is currently in, and when it started --
+    /// what the response panel names and times while it runs. Both are cleared
+    /// once the send finishes, since the finished entry carries its own,
+    /// far more detailed timeline.
+    private(set) var liveStage: RequestTimeline.Kind?
+    private(set) var sendStartedAt: Date?
+
     /// Surfaced as an alert; a failed save or send should say so.
     var errorMessage: String?
 
@@ -132,10 +139,19 @@ final class EditorModel {
     func send() async {
         guard let draft, !isSending else { return }
         isSending = true
-        defer { isSending = false }
+        sendStartedAt = Date()
+        defer {
+            isSending = false
+            liveStage = nil
+            sendStartedAt = nil
+        }
 
         do {
-            let entry = try await sender.sendAndRecord(draft.normalized)
+            // The observer is called from the pipeline's own context, so it
+            // hops back here before touching observable state.
+            let entry = try await sender.sendAndRecord(draft.normalized) { stage in
+                await MainActor.run { self.liveStage = stage }
+            }
             lastEntry = entry
             await onSent?(entry)
         } catch {

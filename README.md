@@ -105,6 +105,36 @@ in, auth expanded into a real header, `{{variables}}` resolved, and the body enc
 its mode — so the command runs as pasted. (Which also means it carries whatever secrets
 the variables hold.)
 
+**Timeline** — While a request is in flight the response panel names the stage it is in
+— preparing, sending, saving, running the script — and counts the seconds. When the
+response lands, the `142 ms` summary becomes expandable into a breakdown of where that
+time actually went:
+
+```
+hop 1
+  DNS            ▇                          4 ms
+  connect         ▇▇▇                      11 ms
+    TLS             ▇▇                      8 ms
+  request            ▏                      1 ms
+  waiting (TTFB)      ▇▇▇▇▇▇▇▇▇▇▇          89 ms
+  download                       ▇▇         6 ms
+──────────────────────────────────────────────────
+  prepare        ▇                          3 ms
+  send            ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇         112 ms
+  script                          ▇▇▇▇     18 ms
+```
+
+A redirect chain gets a block per hop; a hop that went out over an already-open
+connection says so instead of showing DNS and handshake rows it doesn't have. The
+breakdown is stored with the entry, so opening an old send from history shows its
+timeline too — including a send that failed, which is when the question "how long
+before it gave up?" matters most.
+
+The live indicator is deliberately coarser than the breakdown that replaces it: the
+network phases come from `URLSessionTaskMetrics`, which URLSession hands over only once
+the task has completed. Nothing can report that DNS has finished while it is finishing,
+so the timeline gains detail when the response arrives rather than filling in smoothly.
+
 **Response viewer** — JSON syntax highlighting, pretty/raw toggle, and find-in-body.
 Minified responses are reformatted for reading, including ones truncated for display.
 
@@ -141,12 +171,13 @@ xcodebuild -project requester.xcodeproj -scheme requester \
            -destination 'platform=macOS' test
 ```
 
-295 unit tests (Swift Testing) covering the curl importer and exporter (which are tested
+309 unit tests (Swift Testing) covering the curl importer and exporter (which are tested
 against each other, so the two cannot drift), shell quoting, the relaxed-JSON paste
 repair, collection import, variable resolution, request building, history storage and
-reconciliation, the used-order lookup behind the History tab, the JSON formatter, syntax
-highlighting, auto-indent, the script runner, and the full send→persist→script→variables
-pipeline against a stubbed network layer. Plus 7 UI tests that drive the real app.
+reconciliation, the used-order lookup behind the History tab, timeline spans (redirects,
+reused connections, half-filled metrics), the JSON formatter, syntax highlighting,
+auto-indent, the script runner, and the full send→persist→script→variables pipeline
+against a stubbed network layer. Plus 7 UI tests that drive the real app.
 
 ---
 

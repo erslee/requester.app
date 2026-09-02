@@ -8,6 +8,11 @@ nonisolated struct HTTPExecutor: Sendable {
         var response: ResponseRecord
         var headers: [KeyValueItem]
         var bodyText: String
+
+        /// The network phases, one set per redirect hop. Empty when URLSession
+        /// reported no metrics -- a stubbed session in a test, most often.
+        var networkSpans: [RequestTimeline.Span] = []
+        var reusedConnectionHops: Set<Int> = []
     }
 
     let session: URLSession
@@ -22,6 +27,11 @@ nonisolated struct HTTPExecutor: Sendable {
 
         let clock = ContinuousClock()
         let start = clock.now
+        // The metric dates URLSession reports are wall-clock, so lining the
+        // network phases up with them needs a wall-clock origin. The elapsed
+        // total still comes from the monotonic clock above, which a system
+        // clock adjustment mid-send cannot distort.
+        let startDate = Date()
         let (data, response) = try await session.data(for: urlRequest, delegate: collector)
         let elapsed = start.duration(to: clock.now)
 
@@ -42,10 +52,18 @@ nonisolated struct HTTPExecutor: Sendable {
         // record of what went over the wire comes from the task metrics.
         let sentHeaders = collector.sentHeaders ?? urlRequest.allHTTPHeaderFields ?? [:]
 
+        // Measured from the moment this send began, so the phases line up with
+        // the app stages around them on one axis.
+        let (networkSpans, reusedHops) = RequestTimeline.networkSpans(
+            from: collector.transactions, since: startDate
+        )
+
         return Sent(
             response: record,
             headers: Self.keyValueItems(from: sentHeaders),
-            bodyText: urlRequest.httpBody.map(Self.decodeUTF8) ?? ""
+            bodyText: urlRequest.httpBody.map(Self.decodeUTF8) ?? "",
+            networkSpans: networkSpans,
+            reusedConnectionHops: reusedHops
         )
     }
 
@@ -215,6 +233,7 @@ private final class TaskMetricsCollector: NSObject, URLSessionTaskDelegate, Send
     private struct Captured: Sendable {
         var sentHeaders: [String: String]?
         var networkProtocolName: String?
+        var transactions: [RequestTimeline.TransactionDates] = []
     }
 
     private let captured = Mutex(Captured())
@@ -222,14 +241,41 @@ private final class TaskMetricsCollector: NSObject, URLSessionTaskDelegate, Send
     var sentHeaders: [String: String]? { captured.withLock(\.sentHeaders) }
     var networkProtocolName: String? { captured.withLock(\.networkProtocolName) }
 
+    /// One entry per request actually put on the wire -- a redirect chain
+    /// produces several, in the order they were followed.
+    var transactions: [RequestTimeline.TransactionDates] {
+        captured.withLock(\.transactions)
+    }
+
     func urlSession(
         _ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics
     ) {
-        guard let transaction = metrics.transactionMetrics.last else { return }
+        // The headers and protocol describe the request that produced the
+        // response, which is the last hop; the timings describe every hop.
+        let all = metrics.transactionMetrics
         captured.withLock {
-            $0.sentHeaders = transaction.request.allHTTPHeaderFields
-            $0.networkProtocolName = transaction.networkProtocolName
+            $0.sentHeaders = all.last?.request.allHTTPHeaderFields
+            $0.networkProtocolName = all.last?.networkProtocolName
+            $0.transactions = all.map(Self.dates(from:))
         }
+    }
+
+    private static func dates(
+        from transaction: URLSessionTaskTransactionMetrics
+    ) -> RequestTimeline.TransactionDates {
+        var dates = RequestTimeline.TransactionDates()
+        dates.domainLookupStart = transaction.domainLookupStartDate
+        dates.domainLookupEnd = transaction.domainLookupEndDate
+        dates.connectStart = transaction.connectStartDate
+        dates.connectEnd = transaction.connectEndDate
+        dates.secureConnectionStart = transaction.secureConnectionStartDate
+        dates.secureConnectionEnd = transaction.secureConnectionEndDate
+        dates.requestStart = transaction.requestStartDate
+        dates.requestEnd = transaction.requestEndDate
+        dates.responseStart = transaction.responseStartDate
+        dates.responseEnd = transaction.responseEndDate
+        dates.isReusedConnection = transaction.isReusedConnection
+        return dates
     }
 }
 

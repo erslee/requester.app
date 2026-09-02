@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import requester
 
@@ -291,5 +292,112 @@ struct SendPipelineTests {
         #expect(stored.count == 1)
         #expect(stored.first?.response?.bodyText.count == 1_000)
         #expect(stored.first?.scriptResult?.succeeded == true)
+    }
+
+    // MARK: - Timeline
+
+    /// A convenience for the timeline tests: the pipeline over a stub, with no
+    /// project and no variables to set up.
+    private func service(storage: LocalFileStorage) -> HistoryService {
+        HistoryService(
+            executor: HTTPExecutor(session: StubURLProtocol.session()),
+            history: HistoryRepository(storage: storage),
+            variables: VariableRepository(storage: storage),
+            projects: ProjectRepository(storage: storage),
+            scripts: ScriptRunner()
+        )
+    }
+
+    @Test func recordsATimelineOnTheEntryAndOnDisk() async throws {
+        // Arrange
+        let (storage, root) = try makeStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        StubURLProtocol.stub = .init()
+
+        var request = APIRequest(id: "r1", projectID: "p1")
+        request.url = "https://example.com/a"
+
+        // Act
+        let entry = try await service(storage: storage).sendAndRecord(request)
+
+        // Assert -- the stages the pipeline owns are measured
+        let timeline = try #require(entry.timeline)
+        #expect(timeline.appSpans.map(\.kind) == [.prepare, .send])
+        #expect(timeline.totalMilliseconds > 0)
+
+        // Assert -- and it survives the trip to the history file
+        let stored = try await HistoryRepository(storage: storage).listAll(projectID: "p1")
+        #expect(stored.first?.timeline == timeline)
+    }
+
+    /// The stages are announced as they begin, which is what drives the live
+    /// indicator. Order is the point: it is a sequence, not a set.
+    @Test func announcesEachStageAsItBegins() async throws {
+        // Arrange
+        let (storage, root) = try makeStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        StubURLProtocol.stub = .init(body: #"{"v":1}"#)
+
+        var request = APIRequest(id: "r1", projectID: "p1")
+        request.url = "https://example.com/a"
+        request.postResponseScript = "variables.v = response.json().v"
+
+        let announced = Mutex([RequestTimeline.Kind]())
+
+        // Act
+        _ = try await service(storage: storage).sendAndRecord(request) { kind in
+            announced.withLock { $0.append(kind) }
+        }
+
+        // Assert
+        #expect(
+            announced.withLock { $0 } == [
+                .prepare, .send, .saveHistory, .script, .saveScriptResult,
+            ]
+        )
+    }
+
+    /// A script's own duration can only be recorded by the amendment line --
+    /// the first line was written before the script had run.
+    @Test func theAmendmentCarriesTheScriptsTiming() async throws {
+        // Arrange
+        let (storage, root) = try makeStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+        StubURLProtocol.stub = .init()
+
+        var request = APIRequest(id: "r1", projectID: "p1")
+        request.url = "https://example.com/a"
+        request.postResponseScript = "var n = 0; for (var i = 0; i < 20000; i++) { n += i }"
+
+        // Act
+        let entry = try await service(storage: storage).sendAndRecord(request)
+
+        // Assert -- the returned entry and the stored one agree
+        let timeline = try #require(entry.timeline)
+        #expect(timeline.appSpans.map(\.kind) == [.prepare, .send, .script])
+
+        let stored = try await HistoryRepository(storage: storage).listAll(projectID: "p1")
+        #expect(stored.first?.timeline?.appSpans.map(\.kind) == [.prepare, .send, .script])
+    }
+
+    /// The case a timeline matters most for: nothing came back, and the
+    /// question is how long it spent before giving up.
+    @Test func recordsATimelineForASendThatFailed() async throws {
+        // Arrange -- no scheme or host, so the request never leaves the app
+        let (storage, root) = try makeStorage()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var request = APIRequest(id: "r1", projectID: "p1")
+        request.url = "not a url"
+
+        // Act
+        let entry = try await service(storage: storage).sendAndRecord(request)
+
+        // Assert
+        #expect(entry.response == nil)
+        #expect(entry.error != nil)
+        let timeline = try #require(entry.timeline)
+        #expect(timeline.appSpans.map(\.kind) == [.prepare, .send])
+        #expect(timeline.totalMilliseconds > 0)
     }
 }
