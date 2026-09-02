@@ -231,6 +231,50 @@ nonisolated struct FoldableText: Sendable {
             (text as NSString).substring(with: lineRange(line))
         }
 
+        // MARK: - Anchoring across a fold
+
+        /// A place in the *unfolded* text, which is the only description of a
+        /// position that survives a fold.
+        ///
+        /// Every displayed offset shifts when a block above it collapses, so a
+        /// reader's position -- the search match they are on -- has to be
+        /// written down in these terms before the projection changes and read
+        /// back afterwards.
+        struct SourcePosition: Sendable, Equatable {
+            var line: Int
+            /// UTF-16 offset into that line.
+            var column: Int
+        }
+
+        /// Which line of the original a displayed offset falls on, and how far
+        /// into it.
+        func sourcePosition(ofOffset offset: Int) -> SourcePosition? {
+            guard offset >= 0, !lineStarts.isEmpty else { return nil }
+
+            // The last line starting at or before the offset. Ascending, so a
+            // binary search; a large response has a line per row of the file.
+            var low = 0
+            var high = lineStarts.count - 1
+            while low < high {
+                let middle = (low + high + 1) / 2
+                if lineStarts[middle] <= offset { low = middle } else { high = middle - 1 }
+            }
+
+            return SourcePosition(line: sourceLines[low], column: offset - lineStarts[low])
+        }
+
+        /// Where that position sits in this projection, or nil when the line is
+        /// inside a collapsed block and so is not on screen at all.
+        ///
+        /// The column is clamped to the line: a collapsed opener keeps its
+        /// source line but gains a marker and loses the rest of its block, so
+        /// an offset from the expanded form can point past the end of it.
+        func offset(ofSourcePosition position: SourcePosition) -> Int? {
+            guard let line = sourceLines.firstIndex(of: position.line) else { return nil }
+            let range = lineRange(line)
+            return range.location + min(max(position.column, 0), max(range.length - 1, 0))
+        }
+
         /// The one span in which this projection differs from `previous`, as a
         /// range in the previous text and what to put there.
         ///

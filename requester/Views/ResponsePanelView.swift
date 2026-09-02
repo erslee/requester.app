@@ -31,6 +31,16 @@ struct ResponsePanelView: View {
     /// Which of `matches` Enter last landed on.
     @State private var currentMatch = 0
 
+    /// Where the reader was, in the unfolded body, when a fold was toggled.
+    ///
+    /// Folding rewrites every offset below it, so `matches` has to be scanned
+    /// again -- and the scan cannot know which of the new ranges is the one the
+    /// reader was standing on. This carries that across, and is cleared as soon
+    /// as it has been used. Nil for a scan caused by anything else: a new
+    /// response, or a Pretty/Raw switch, is a different body, and starting at
+    /// its first match is right.
+    @State private var matchAnchor: FoldableText.Projection.SourcePosition?
+
     @FocusState private var isSearchFieldFocused: Bool
 
     /// The body indexed for display: formatted text, where its lines start, and
@@ -386,6 +396,10 @@ struct ResponsePanelView: View {
         guard !searchTerm.isEmpty else {
             matches = []
             currentMatch = 0
+            // Folding with no search running leaves an anchor nothing consumes.
+            // Dropped here, or the next search would open partway down the body
+            // at whatever was under it at the time.
+            matchAnchor = nil
             return
         }
 
@@ -403,7 +417,23 @@ struct ResponsePanelView: View {
 
         guard !Task.isCancelled else { return }
         matches = found
-        currentMatch = 0
+        currentMatch = restoredMatchIndex(in: found)
+        matchAnchor = nil
+    }
+
+    /// Which match to stand on after a rescan.
+    ///
+    /// Zero unless a fold put an anchor down, in which case it is the first
+    /// match at or after where the reader was. "At or after" rather than
+    /// nearest, because the anchor's own match is at exactly that offset when
+    /// it is still on screen -- and when the fold swallowed it, the next match
+    /// below is where reading would have continued.
+    private func restoredMatchIndex(in found: [NSRange]) -> Int {
+        guard let matchAnchor,
+              let offset = projection.offset(ofSourcePosition: matchAnchor),
+              let index = found.firstIndex(where: { $0.location >= offset })
+        else { return 0 }
+        return index
     }
 
     /// A minified response arrives as one enormous line, which is unreadable and
@@ -431,7 +461,21 @@ struct ResponsePanelView: View {
     }
 
     /// Collapses or expands the block opening on `line`.
+    ///
+    /// The reader's place in the search is noted first, in terms of the
+    /// unfolded body, so the rescan that follows can put them back on the match
+    /// they were on rather than at the top.
     private func toggleFold(at line: Int) {
+        // Only the first of a run of folds anchors. The scan is debounced, so a
+        // second click lands while `matches` still describe the projection from
+        // before the first one -- reading a position off them then would place
+        // the anchor on the wrong line. The first click's anchor was taken
+        // while the two agreed, and is the one worth keeping.
+        if matchAnchor == nil {
+            matchAnchor = highlightedMatch.flatMap {
+                projection.sourcePosition(ofOffset: $0.location)
+            }
+        }
         if folded.contains(line) { folded.remove(line) } else { folded.insert(line) }
         reproject()
     }

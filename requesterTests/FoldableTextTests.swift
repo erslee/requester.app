@@ -292,6 +292,112 @@ struct FoldableTextTests {
         #expect(applying(open.difference(from: closed), to: closed.text) == open.text)
     }
 
+    // MARK: - Anchoring across a fold
+
+    /// Collapsing a block shifts every offset below it, so a reader's position
+    /// -- the search match they are on -- is written down as a place in the
+    /// *unfolded* text and read back afterwards. These are the round trips
+    /// that has to survive.
+
+    /// The offset of the first occurrence of `needle` in a projection.
+    private func offset(of needle: String, in projection: FoldableText.Projection) -> Int {
+        (projection.text as NSString).range(of: needle).location
+    }
+
+    /// The first line that opens a foldable block, skipping the root: folding
+    /// line 0 collapses the whole body, which leaves nothing to anchor to.
+    private func foldableBlock(in document: FoldableText) throws -> Int {
+        try #require((1..<document.lineCount).first { document.closingLine(for: $0) != nil })
+    }
+
+    @Test func readsADisplayedOffsetBackToItsLineInTheOriginal() throws {
+        // Arrange
+        let open = FoldableText.json(sample).projected(folding: [])
+
+        // Act
+        let position = try #require(
+            open.sourcePosition(ofOffset: offset(of: #""owner""#, in: open))
+        )
+
+        // Assert -- the line it named really is the line holding that key
+        #expect(open.lineText(position.line).contains(#""owner""#))
+        #expect(position.column >= 0)
+    }
+
+    /// The case the bug was about: a block collapses *above* where you are
+    /// reading, every offset below it shifts, and the anchor must still land on
+    /// the same text.
+    @Test func survivesABlockCollapsingAboveIt() throws {
+        // Arrange -- anchor on "ok", the last key in the sample
+        let document = FoldableText.json(sample)
+        let open = document.projected(folding: [])
+        let before = offset(of: #""ok""#, in: open)
+        let anchor = try #require(open.sourcePosition(ofOffset: before))
+
+        // Act
+        let closed = document.projected(folding: [try foldableBlock(in: document)])
+        let after = try #require(closed.offset(ofSourcePosition: anchor))
+
+        // Assert -- it moved, and it still points at "ok"
+        #expect(after < before)
+        #expect((closed.text as NSString).substring(from: after).hasPrefix(#""ok""#))
+    }
+
+    /// A position inside a block that has just been collapsed is not on screen
+    /// at all, and must say so rather than resolve to something arbitrary.
+    @Test func reportsNothingForAPositionInsideACollapsedBlock() throws {
+        // Arrange
+        let document = FoldableText.json(sample)
+        let block = try foldableBlock(in: document)
+        let closing = try #require(document.closingLine(for: block))
+        try #require(closing > block + 1)
+        let hidden = FoldableText.Projection.SourcePosition(line: block + 1, column: 0)
+
+        // Act / Assert -- visible while open, gone once collapsed
+        #expect(document.projected(folding: []).offset(ofSourcePosition: hidden) != nil)
+        #expect(document.projected(folding: [block]).offset(ofSourcePosition: hidden) == nil)
+    }
+
+    /// A collapsed opener keeps its source line but loses its block, so a
+    /// column taken from the expanded form can point past the end of it.
+    @Test func clampsAColumnThatNoLongerFitsItsLine() throws {
+        // Arrange
+        let document = FoldableText.json(sample)
+        let block = try foldableBlock(in: document)
+        let closed = document.projected(folding: [block])
+
+        // Act
+        let resolved = try #require(
+            closed.offset(
+                ofSourcePosition: .init(line: block, column: 10_000)
+            )
+        )
+
+        // Assert -- inside the text, still on the line asked for
+        #expect(resolved < (closed.text as NSString).length)
+        #expect(closed.sourcePosition(ofOffset: resolved)?.line == block)
+    }
+
+    @Test func roundTripsEveryLineStartWhileNothingIsFolded() throws {
+        // Arrange
+        let open = FoldableText.json(sample).projected(folding: [])
+
+        // Act / Assert -- with nothing folded, displayed and source coincide
+        for line in 0..<open.lineCount {
+            let start = open.lineStarts[line]
+            let position = try #require(open.sourcePosition(ofOffset: start))
+            #expect(position.column == 0)
+            #expect(open.offset(ofSourcePosition: position) == start)
+        }
+    }
+
+    @Test func reportsNothingForAnOffsetBeforeTheText() {
+        // Act / Assert
+        #expect(
+            FoldableText.json(sample).projected(folding: []).sourcePosition(ofOffset: -1) == nil
+        )
+    }
+
     // MARK: - Plain text
 
     @Test func plainTextIsIndexedButNeverFoldable() {
