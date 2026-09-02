@@ -9,10 +9,15 @@ nonisolated struct HTTPExecutor: Sendable {
         var headers: [KeyValueItem]
         var bodyText: String
 
-        /// The network phases, one set per redirect hop. Empty when URLSession
-        /// reported no metrics -- a stubbed session in a test, most often.
-        var networkSpans: [RequestTimeline.Span] = []
-        var reusedConnectionHops: Set<Int> = []
+        /// What URLSession measured, one entry per request actually put on the
+        /// wire, so a redirect chain yields several. Empty when no metrics were
+        /// reported -- a stubbed session in a test, most often.
+        ///
+        /// Raw dates rather than finished timeline spans: turning them into
+        /// spans needs an origin to measure from, and the only correct origin
+        /// is the one the *caller* started timing at. Handing that decision
+        /// back is what keeps a second origin from existing at all.
+        var transactions: [RequestTimeline.TransactionDates] = []
     }
 
     let session: URLSession
@@ -27,11 +32,6 @@ nonisolated struct HTTPExecutor: Sendable {
 
         let clock = ContinuousClock()
         let start = clock.now
-        // The metric dates URLSession reports are wall-clock, so lining the
-        // network phases up with them needs a wall-clock origin. The elapsed
-        // total still comes from the monotonic clock above, which a system
-        // clock adjustment mid-send cannot distort.
-        let startDate = Date()
         let (data, response) = try await session.data(for: urlRequest, delegate: collector)
         let elapsed = start.duration(to: clock.now)
 
@@ -52,18 +52,11 @@ nonisolated struct HTTPExecutor: Sendable {
         // record of what went over the wire comes from the task metrics.
         let sentHeaders = collector.sentHeaders ?? urlRequest.allHTTPHeaderFields ?? [:]
 
-        // Measured from the moment this send began, so the phases line up with
-        // the app stages around them on one axis.
-        let (networkSpans, reusedHops) = RequestTimeline.networkSpans(
-            from: collector.transactions, since: startDate
-        )
-
         return Sent(
             response: record,
             headers: Self.keyValueItems(from: sentHeaders),
             bodyText: urlRequest.httpBody.map(Self.decodeUTF8) ?? "",
-            networkSpans: networkSpans,
-            reusedConnectionHops: reusedHops
+            transactions: collector.transactions
         )
     }
 

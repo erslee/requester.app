@@ -91,10 +91,15 @@ nonisolated struct HistoryService: Sendable {
             }
         }
 
-        // The network phases are known only now, and are measured from the same
-        // origin as the stages around them.
-        timeline.spans += sent.networkSpans
-        timeline.reusedConnectionHops = sent.reusedConnectionHops
+        // The network phases are known only now. They are measured from
+        // `sentAt` -- the same origin as every stage around them -- so the two
+        // halves share one axis and the network block sits inside `send` rather
+        // than floating off to the left of it.
+        let (networkSpans, reusedHops) = RequestTimeline.networkSpans(
+            from: sent.transactions, since: sentAt
+        )
+        timeline.spans += networkSpans
+        timeline.reusedConnectionHops = reusedHops
 
         var entry = newEntry()
         entry.requestHeadersSent = sent.headers

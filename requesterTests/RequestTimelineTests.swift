@@ -186,6 +186,50 @@ struct RequestTimelineTests {
         #expect(timeline.spans.first?.durationMilliseconds == 0)
     }
 
+    // MARK: - One origin
+
+    /// The two halves of a timeline are built at different moments and from
+    /// different sources -- the app stages as they run, the network phases from
+    /// metrics handed over at the end -- but they are drawn on one axis, so
+    /// they must be measured from one origin.
+    ///
+    /// They were not. The executor timed the network from the instant it began
+    /// sending, while the pipeline timed its stages from the instant the send
+    /// was requested, and the gap between the two was however long preparing
+    /// the request took. Every network bar drew that far to the left, outside
+    /// the `send` stage that contains it. It looked right until a screenshot
+    /// showed DNS starting before the send it happens inside.
+    @Test func networkPhasesFallInsideTheSendStageTheyBelongTo() throws {
+        // Arrange -- the pipeline's shape: prepare, then a send holding the
+        // network phases, measured the way `HistoryService` measures them.
+        let origin = self.origin
+        var timeline = RequestTimeline()
+        timeline.add(.prepare, from: date(0), to: date(4), since: origin)
+        timeline.add(.send, from: date(4), to: date(115), since: origin)
+
+        var dates = RequestTimeline.TransactionDates()
+        dates.domainLookupStart = date(4)
+        dates.domainLookupEnd = date(8)
+        dates.requestStart = date(8)
+        dates.requestEnd = date(9)
+        dates.responseStart = date(110)
+        dates.responseEnd = date(115)
+
+        // Act -- the same origin the app stages used, which is the whole point
+        let (networkSpans, _) = RequestTimeline.networkSpans(from: [dates], since: origin)
+        timeline.spans += networkSpans
+
+        // Assert -- every network phase sits within the send that contains it
+        let send = try #require(timeline.appSpans.first { $0.kind == .send })
+        for span in timeline.spans where span.kind.isNetwork {
+            #expect(span.startMilliseconds >= send.startMilliseconds)
+            #expect(span.endMilliseconds <= send.endMilliseconds)
+        }
+
+        // Assert -- and none of them starts at zero, where `prepare` is
+        #expect(timeline.spans.filter(\.kind.isNetwork).allSatisfy { $0.startMilliseconds > 0 })
+    }
+
     // MARK: - Storage
 
     /// Timelines are written into history, so they have to survive the round
