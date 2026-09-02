@@ -43,6 +43,26 @@ nonisolated enum ProjectListing {
         return project.name.localizedCaseInsensitiveContains(trimmed)
     }
 
+    /// Where the keyboard selection lands after moving `offset` rows.
+    ///
+    /// Clamped at both ends rather than wrapping: holding the arrow key down
+    /// should come to rest at the last project, not cycle back past the first.
+    ///
+    /// Also the rule for keeping a selection honest as the list changes under
+    /// it. A selection the filter has hidden -- or one whose project is gone --
+    /// is not carried forward; the list starts again from its top, which is
+    /// what typing another character should do.
+    static func selecting(
+        from selection: String?, movedBy offset: Int, in projects: [Project]
+    ) -> String? {
+        guard !projects.isEmpty else { return nil }
+        guard let selection, let current = projects.firstIndex(where: { $0.id == selection })
+        else { return projects.first?.id }
+
+        let moved = min(max(current + offset, 0), projects.count - 1)
+        return projects[moved].id
+    }
+
     private static func filtered(_ projects: [Project], matching query: String) -> [Project] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return projects }

@@ -12,6 +12,13 @@ struct LauncherView: View {
     @State private var projects: [Project] = []
     @State private var searchTerm = ""
 
+    /// The row the keyboard is on. Distinct from the hover highlight below:
+    /// the pointer and the arrow keys are two ways of pointing at a row, and
+    /// they should not fight over one piece of state.
+    @State private var selectedProjectID: String?
+
+    @FocusState private var isSearchFocused: Bool
+
     /// The row the pointer is over, so the trash appears where it is useful
     /// rather than sitting on every row as a standing invitation.
     @State private var hoveredProjectID: String?
@@ -32,7 +39,16 @@ struct LauncherView: View {
             }
         }
         .frame(minWidth: 420, minHeight: 360)
-        .task { await reload() }
+        .task {
+            await reload()
+            // The window exists to pick a project, so it opens ready to be
+            // typed into rather than waiting to be clicked first.
+            isSearchFocused = true
+        }
+        // Typing can hide the selected row, and a reload can remove it. Either
+        // way the selection is re-derived from what is actually listed.
+        .onChange(of: searchTerm) { resetSelection() }
+        .onChange(of: projects) { resetSelection() }
         .fileImporter(
             isPresented: $launch.isChoosingImportFile,
             allowedContentTypes: [.json],
@@ -88,9 +104,9 @@ struct LauncherView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            // Offered only once there is a list worth narrowing. A search field
-            // above a single project is furniture.
-            if projects.count > 1 { searchField }
+            // Always present, even with one project: it is where the window
+            // puts the cursor on open, and where Return is caught.
+            searchField
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
@@ -101,6 +117,14 @@ struct LauncherView: View {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("Search projects…", text: $searchTerm)
                 .textFieldStyle(.plain)
+                .focused($isSearchFocused)
+                // Caught on the field, which is what has focus -- so the list
+                // can be steered without ever leaving the text you are typing.
+                // Returning `.handled` is also what stops the arrows walking
+                // the caret to the ends of the field instead.
+                .onKeyPress(.upArrow) { moveSelection(by: -1) }
+                .onKeyPress(.downArrow) { moveSelection(by: 1) }
+                .onSubmit { if let selectedProjectID { open(selectedProjectID) } }
             if !searchTerm.isEmpty {
                 Button {
                     searchTerm = ""
@@ -120,16 +144,25 @@ struct LauncherView: View {
 
     @ViewBuilder
     private var content: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                if listed.isEmpty {
-                    emptyState
-                } else {
-                    ForEach(listed) { row(for: $0) }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if listed.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(listed) { row(for: $0).id($0.id) }
+                    }
                 }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 12)
+            // Arrowing past the bottom of the window has to bring the row with
+            // it, or the selection walks off into a part of the list nobody
+            // can see.
+            .onChange(of: selectedProjectID) { _, id in
+                guard let id else { return }
+                withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(id) }
+            }
         }
 
         Divider()
@@ -193,7 +226,14 @@ struct LauncherView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(.quinary, in: RoundedRectangle(cornerRadius: 6))
+        .background {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(
+                    selectedProjectID == project.id
+                        ? AnyShapeStyle(.tint.opacity(0.22))
+                        : AnyShapeStyle(.quinary)
+                )
+        }
         .padding(.vertical, 1)
         .onHover { hoveredProjectID = $0 ? project.id : nil }
     }
@@ -247,5 +287,21 @@ struct LauncherView: View {
 
     private func reload() async {
         projects = await launch.allProjects()
+    }
+
+    /// Moves the keyboard selection, and tells SwiftUI the key was dealt with
+    /// so it does not also hand it to the text field.
+    private func moveSelection(by offset: Int) -> KeyPress.Result {
+        selectedProjectID = ProjectListing.selecting(
+            from: selectedProjectID, movedBy: offset, in: listed
+        )
+        return .handled
+    }
+
+    /// Puts the selection back on the top row -- or nowhere, when nothing
+    /// matches. Keeping a selection that is no longer listed would leave Return
+    /// opening a project the list is not showing.
+    private func resetSelection() {
+        selectedProjectID = listed.first?.id
     }
 }

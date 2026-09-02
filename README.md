@@ -172,7 +172,7 @@ xcodebuild -project requester.xcodeproj -scheme requester \
            -destination 'platform=macOS' test
 ```
 
-318 unit tests (Swift Testing) covering the curl importer and exporter (which are tested
+323 unit tests (Swift Testing) covering the curl importer and exporter (which are tested
 against each other, so the two cannot drift), shell quoting, the relaxed-JSON paste
 repair, collection import, variable resolution, request building, history storage and
 reconciliation, the used-order lookup behind the History tab, timeline spans (redirects,

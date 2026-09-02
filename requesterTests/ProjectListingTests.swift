@@ -99,4 +99,52 @@ struct ProjectListingTests {
         // Act / Assert -- remembered ids from a previous folder resolve to nothing
         #expect(ProjectListing.ordered([], recentIDs: ["p1"], matching: "").isEmpty)
     }
+
+    // MARK: - Keyboard selection
+
+    /// The list the arrow keys walk: Zebra, Alpha, Mango, beta in that order.
+    private var listed: [Project] {
+        ProjectListing.ordered(all, recentIDs: ["p1", "p2", "p3", "p4"])
+    }
+
+    @Test func movesTheSelectionUpAndDown() {
+        // Act / Assert
+        #expect(ProjectListing.selecting(from: "p1", movedBy: 1, in: listed) == "p2")
+        #expect(ProjectListing.selecting(from: "p2", movedBy: 1, in: listed) == "p3")
+        #expect(ProjectListing.selecting(from: "p3", movedBy: -1, in: listed) == "p2")
+    }
+
+    /// Holding an arrow key should come to rest at the end of the list rather
+    /// than cycling back round to the other end.
+    @Test func stopsAtBothEndsRatherThanWrapping() {
+        // Act / Assert
+        #expect(ProjectListing.selecting(from: "p4", movedBy: 1, in: listed) == "p4")
+        #expect(ProjectListing.selecting(from: "p1", movedBy: -1, in: listed) == "p1")
+    }
+
+    /// The first arrow press has nothing to move from, so it picks the top row
+    /// -- which is also what makes Enter work straight after typing.
+    @Test func startsAtTheTopWhenNothingIsSelected() {
+        // Act / Assert
+        #expect(ProjectListing.selecting(from: nil, movedBy: 1, in: listed) == "p1")
+        #expect(ProjectListing.selecting(from: nil, movedBy: -1, in: listed) == "p1")
+    }
+
+    /// Typing another character can hide the selected row. Carrying that
+    /// selection forward would leave the arrows moving from a row nobody can
+    /// see, so the list starts again from its top.
+    @Test func fallsBackToTheTopWhenTheSelectionIsNoLongerListed() {
+        // Arrange -- "Mango" alone survives the filter
+        let narrowed = ProjectListing.ordered(all, recentIDs: [], matching: "ang")
+
+        // Act / Assert
+        #expect(ProjectListing.selecting(from: "p1", movedBy: 1, in: narrowed) == "p3")
+        #expect(ProjectListing.selecting(from: "p1", movedBy: 0, in: narrowed) == "p3")
+    }
+
+    @Test func selectsNothingWhenNothingIsListed() {
+        // Act / Assert
+        #expect(ProjectListing.selecting(from: "p1", movedBy: 1, in: []) == nil)
+        #expect(ProjectListing.selecting(from: nil, movedBy: 1, in: []) == nil)
+    }
 }
