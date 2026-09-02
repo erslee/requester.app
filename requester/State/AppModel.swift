@@ -27,6 +27,10 @@ final class AppModel {
 
     let editor: EditorModel
     let historyPanel: HistoryModel
+
+    /// Shared with `historyPanel`, which reads the same files for the bottom
+    /// panel's entries.
+    private let historyQuery: HistoryQuery
     let specSync: SpecSyncService
 
     /// The projects this window shows: exactly one, or none while it is
@@ -39,6 +43,12 @@ final class AppModel {
 
     var requestsByProject: [String: [APIRequest]] = [:]
     var variablesByProject: [String: [String: Variable]] = [:]
+
+    /// When each request was last sent, keyed by request id -- what the
+    /// History tab orders by. Derived from history rather than stored on the
+    /// request: history already records every send, and a second copy of that
+    /// fact on the request file would be one that could drift.
+    private(set) var lastUsedByRequestID: [String: Date] = [:]
 
     /// Set when the project this window is for has been deleted, so the window
     /// can close itself rather than sit on an empty tree.
@@ -135,7 +145,9 @@ final class AppModel {
                 scripts: ScriptRunner()
             )
         )
-        self.historyPanel = HistoryModel(query: HistoryQuery(storage: storage), history: history)
+        let historyQuery = HistoryQuery(storage: storage)
+        self.historyQuery = historyQuery
+        self.historyPanel = HistoryModel(query: historyQuery, history: history)
         self.specSync = SpecSyncService(
             requests: requests, projects: projects, variables: variables, fetcher: SpecFetcher()
         )
@@ -147,6 +159,12 @@ final class AppModel {
             guard let self else { return }
             await historyPanel.refresh()
             historyPanel.selectedEntryID = entry.id
+            // The send just told us what the History tab's scan would have to
+            // re-read every file to discover, so it is recorded here rather
+            // than by rescanning.
+            if let requestID = entry.requestID, !requestID.isEmpty {
+                lastUsedByRequestID[requestID] = entry.sentAt
+            }
             if entry.scriptResult?.variablesWritten.isEmpty == false {
                 await reloadVariables(projectID: entry.projectID)
             }
@@ -158,7 +176,17 @@ final class AppModel {
     func load() async {
         await reloadProjects()
         await reloadRequests(projectID: projectID)
+        await reloadLastUsed()
         restoreInterfaceState()
+    }
+
+    /// Reads when each request was last sent, for the History tab's order.
+    ///
+    /// Scanned once per window, then kept current by `onSent` above -- the only
+    /// thing that changes a request's position in that list is sending it.
+    private func reloadLastUsed() async {
+        lastUsedByRequestID =
+            (try? await historyQuery.lastUsed(projectID: projectID)) ?? [:]
     }
 
     /// Brings the window back as it was left.
@@ -778,6 +806,29 @@ final class AppModel {
     /// filter -- an empty tab needs to say which of the two emptinesses it is.
     var hasFavorites: Bool {
         allVisibleRequests.contains { $0.isFavorite }
+    }
+
+    /// The requests that have been sent, most recently sent first.
+    ///
+    /// A request with no send is left out rather than sorted to the bottom:
+    /// this list is an order, and a request that has never been used has no
+    /// place in it. The Project tab is where everything is listed.
+    ///
+    /// Built from `visibleRequests` for the same reason `favoriteRequests` is,
+    /// so the filter field narrows this tab exactly as it narrows the others.
+    var recentRequests: [APIRequest] {
+        visibleRequests(in: projectID)
+            .compactMap { request in
+                lastUsedByRequestID[request.id].map { (request, $0) }
+            }
+            .sorted { $0.1 > $1.1 }
+            .map(\.0)
+    }
+
+    /// Whether anything has ever been sent, ignoring the filter -- the same
+    /// two-emptinesses question `hasFavorites` answers.
+    var hasRecentRequests: Bool {
+        allVisibleRequests.contains { lastUsedByRequestID[$0.id] != nil }
     }
 
     func isFavorite(requestID: String) -> Bool {

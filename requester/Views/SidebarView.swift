@@ -51,7 +51,7 @@ struct SidebarView: View {
     /// Whichever tab is showing, under the shared bottom bar -- the new-request
     /// button and the filter belong to the sidebar, not to one list.
     ///
-    /// Both lists are built and kept, with the one not in front hidden rather
+    /// Every list is built and kept, with the ones not in front hidden rather
     /// than removed. A `switch` here would destroy the scroll view holding the
     /// offset, so coming back to a tab would land at the top of it; hiding
     /// leaves AppKit to keep each list exactly where it was left.
@@ -60,6 +60,7 @@ struct SidebarView: View {
         ZStack {
             tab(.project) { list }
             tab(.favorites) { favoritesList }
+            tab(.history) { historyList }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .onChange(of: model.filterFocusRequests) { isFilterFocused = true }
@@ -125,8 +126,8 @@ struct SidebarView: View {
     // MARK: - Tabs
 
     /// Xcode's navigator strip: one sidebar, a row of icons deciding what it
-    /// lists. Two tabs today -- the project's tree, and what has been starred
-    /// out of it.
+    /// lists -- the project's tree, what has been starred out of it, and what
+    /// has most recently been sent.
     private var tabStrip: some View {
         HStack(spacing: 2) {
             ForEach(SidebarTab.allCases) { tab in
@@ -205,6 +206,47 @@ struct SidebarView: View {
                 model.hasFavorites
                     ? "No favorite matches the filter."
                     : "Right-click a request and choose Add to Favorites."
+            )
+        }
+    }
+
+    /// The requests that have been sent, most recent first -- what was being
+    /// worked on, without hunting for it in the tree.
+    ///
+    /// Rows for *requests*, not for sends: one row per request, at its latest
+    /// use. The panel along the bottom of the window is where individual sends
+    /// are listed, and duplicating that here would be a second history with
+    /// different rules.
+    private var historyList: some View {
+        List(selection: $model.selection) {
+            ForEach(model.recentRequests) { request in
+                let tag = SidebarSelection.request(
+                    projectID: model.projectID, requestID: request.id
+                )
+                requestRow(request, in: model.projectID)
+                    .tag(tag)
+                    .id(tag)
+                    .contextMenu {
+                        requestMenu(projectID: model.projectID, requestID: request.id)
+                    }
+            }
+        }
+        .listStyle(.sidebar)
+        .overlay {
+            if model.recentRequests.isEmpty { historyPlaceholder }
+        }
+    }
+
+    /// The same two emptinesses as the Favorites tab: nothing sent yet, or
+    /// everything sent hidden by the filter.
+    private var historyPlaceholder: some View {
+        ContentUnavailableView {
+            Label("Nothing Sent Yet", systemImage: "clock")
+        } description: {
+            Text(
+                model.hasRecentRequests
+                    ? "No recently sent request matches the filter."
+                    : "Send a request and it will appear here, newest first."
             )
         }
     }

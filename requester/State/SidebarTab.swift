@@ -1,13 +1,14 @@
 import Foundation
 
-/// Which list the sidebar is showing -- the project's tree, or the requests
-/// starred out of it.
+/// Which list the sidebar is showing -- the project's tree, the requests
+/// starred out of it, or the ones most recently sent.
 ///
 /// The tab strip is Xcode's navigator idea: one sidebar, several ways of
 /// looking at the same project, rather than a second pane to find room for.
 enum SidebarTab: String, CaseIterable, Identifiable, Sendable {
     case project
     case favorites
+    case history
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum SidebarTab: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .project: "Project Navigator"
         case .favorites: "Favorites Navigator"
+        case .history: "History Navigator"
         }
     }
 
@@ -30,6 +32,7 @@ enum SidebarTab: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .project: isSelected ? "folder.fill" : "folder"
         case .favorites: isSelected ? "bookmark.fill" : "bookmark"
+        case .history: isSelected ? "clock.fill" : "clock"
         }
     }
 }

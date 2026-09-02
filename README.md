@@ -27,13 +27,22 @@ are on the right-click menu of a folder or the project. Where you file something
 yours: a re-sync never moves a request you have put somewhere.
 
 **Favorites** — A tab strip sits at the top of the sidebar, Xcode-navigator style:
-the folder icon is the project's tree, the bookmark icon is everything you have starred.
+the folder icon is the project's tree, the bookmark icon is everything you have starred,
+the clock icon is what you have most recently sent.
 **Add to Favorites** is on the right-click menu of any request, and **⌘D** stars or
 unstars whichever request is selected. The Favorites tab lists them flat — method, name,
 and the folder each one is filed in — so it reads as a jump list rather than a second
 tree; starred requests carry a small bookmark in the project tree too. Being a favorite
 is stored on the request itself, so it travels with the data folder rather than staying
-on one machine. The filter at the bottom narrows both tabs.
+on one machine.
+
+**History tab** — The clock tab lists the project's requests in the order they were last
+sent, newest first. One row per request, at its most recent use — individual sends are
+the bottom panel's job. The order is read back out of the history files rather than
+stamped onto each request, so there is no second copy of "when was this sent" to drift
+out of step; a request that has never been sent simply isn't listed.
+
+The filter at the bottom narrows all three tabs.
 
 **Filter** — A filter field sits at the bottom of the sidebar, next to the new-request
 button. Typing narrows the list to requests whose name, URL, or method match; Escape
@@ -89,7 +98,7 @@ params, auth, bodies, collection variables, and post-response test scripts, whos
 host-specific API calls are translated to this app's. Anything that can't be
 represented is reported in a summary rather than dropped silently.
 
-**Export** — The terminal button next to *Send*, or **Edit → Copy as curl (⇧⌘C)**, puts
+**Export** — The copy button next to *Send*, or **Edit → Copy as curl (⇧⌘C)**, puts
 the open request on the clipboard as a `curl` command. It is built from the very request
 that would be sent: query params folded into the URL, the project's global headers merged
 in, auth expanded into a real header, `{{variables}}` resolved, and the body encoded for
@@ -132,12 +141,12 @@ xcodebuild -project requester.xcodeproj -scheme requester \
            -destination 'platform=macOS' test
 ```
 
-291 unit tests (Swift Testing) covering the curl importer and exporter (which are tested
+295 unit tests (Swift Testing) covering the curl importer and exporter (which are tested
 against each other, so the two cannot drift), shell quoting, the relaxed-JSON paste
 repair, collection import, variable resolution, request building, history storage and
-reconciliation, the JSON formatter, syntax highlighting, auto-indent, the script runner,
-and the full send→persist→script→variables pipeline against a stubbed network layer.
-Plus 7 UI tests that drive the real app.
+reconciliation, the used-order lookup behind the History tab, the JSON formatter, syntax
+highlighting, auto-indent, the script runner, and the full send→persist→script→variables
+pipeline against a stubbed network layer. Plus 7 UI tests that drive the real app.
 
 ---
 

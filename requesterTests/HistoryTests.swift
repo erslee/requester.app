@@ -130,4 +130,64 @@ struct HistoryTests {
         // Assert
         #expect(entries.map(\.id) == ["july"])
     }
+
+    // MARK: - Used order
+
+    /// The sidebar's History tab orders requests by their most recent send, so
+    /// what matters is that a request is reported once, at its newest.
+    @Test func reportsTheNewestSendPerRequest() async throws {
+        // Arrange
+        let storage = InMemoryStorage()
+        let history = HistoryRepository(storage: storage)
+        let old = Date(timeIntervalSince1970: 1_700_000_000)
+        let recent = old.addingTimeInterval(3600)
+        _ = try await history.append(entry(id: "a", requestID: "r1", sentAt: old))
+        _ = try await history.append(entry(id: "b", requestID: "r1", sentAt: recent))
+        _ = try await history.append(entry(id: "c", requestID: "r2", sentAt: old))
+
+        // Act
+        let lastUsed = try await HistoryQuery(storage: storage).lastUsed(projectID: "p1")
+
+        // Assert -- one date per request, the later one where it was sent twice
+        #expect(lastUsed == ["r1": recent, "r2": old])
+    }
+
+    /// A send made from a history entry has no saved request behind it. There
+    /// is nothing in the sidebar for it to order, so it must not invent a row.
+    @Test func ignoresSendsWithNoRequestBehindThem() async throws {
+        // Arrange
+        let storage = InMemoryStorage()
+        let history = HistoryRepository(storage: storage)
+        _ = try await history.append(entry(id: "a", requestID: nil, sentAt: .now))
+
+        // Act / Assert
+        #expect(try await HistoryQuery(storage: storage).lastUsed(projectID: "p1").isEmpty)
+    }
+
+    /// A script result is appended as a second line sharing the entry's id.
+    /// Both lines carry the same `sentAt`, so the answer must not shift.
+    @Test func isUnaffectedByAmendmentLines() async throws {
+        // Arrange
+        let storage = InMemoryStorage()
+        let history = HistoryRepository(storage: storage)
+        let sentAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let original = try await history.append(entry(id: "e1", requestID: "r1", sentAt: sentAt))
+        var result = ScriptResult(ran: true, succeeded: true)
+        result.variablesWritten = ["token": "abc"]
+        _ = try await history.appendScriptResult(result, to: original)
+
+        // Act
+        let lastUsed = try await HistoryQuery(storage: storage).lastUsed(projectID: "p1")
+
+        // Assert
+        #expect(lastUsed == ["r1": sentAt])
+    }
+
+    @Test func reportsNothingForAProjectWithNoHistory() async throws {
+        // Act / Assert
+        #expect(
+            try await HistoryQuery(storage: InMemoryStorage())
+                .lastUsed(projectID: "nope").isEmpty
+        )
+    }
 }

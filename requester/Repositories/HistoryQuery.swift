@@ -72,4 +72,44 @@ nonisolated struct HistoryQuery: Sendable {
 
         return byID.values.sorted { $0.sentAt > $1.sentAt }
     }
+
+    /// When each request was last sent, for the sidebar's used-order list.
+    ///
+    /// Deliberately not `search` plus a `map`. That decodes every stored entry
+    /// in full -- request snapshot, sent headers, and a response body up to the
+    /// 256 KB spill threshold -- and this runs once per project load for a
+    /// result that is two fields wide. `Sent` below decodes only those two, so
+    /// the cost tracks the number of sends rather than their size.
+    ///
+    /// Amendment lines need no reconciliation here: a second line sharing an
+    /// id repeats the `sentAt` of the send it amends, so taking the maximum per
+    /// request is right whichever lines are read.
+    func lastUsed(projectID: String) async throws -> [String: Date] {
+        /// The two fields this needs, so the rest of a line is never decoded.
+        struct Sent: Decodable {
+            var requestID: String?
+            var sentAt: Date
+        }
+
+        let filenames = try await storage.listDirectory(at: "history/\(projectID)")
+        var lastUsed: [String: Date] = [:]
+
+        for filename in filenames.filter({ $0.hasSuffix(".jsonl") }) {
+            guard let content = try await storage.readText(
+                at: "history/\(projectID)/\(filename)"
+            ) else { continue }
+
+            for line in content.split(separator: "\n", omittingEmptySubsequences: true) {
+                guard let sent = try? JSONCoding.decoder.decode(
+                    Sent.self, from: Data(line.utf8)
+                ), let requestID = sent.requestID, !requestID.isEmpty else { continue }
+
+                if sent.sentAt > lastUsed[requestID] ?? .distantPast {
+                    lastUsed[requestID] = sent.sentAt
+                }
+            }
+        }
+
+        return lastUsed
+    }
 }
