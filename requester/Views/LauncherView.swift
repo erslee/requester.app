@@ -10,7 +10,7 @@ struct LauncherView: View {
     @Bindable var launch: LaunchState
 
     @State private var projects: [Project] = []
-    @State private var showsAllProjects = false
+    @State private var searchTerm = ""
 
     /// The row the pointer is over, so the trash appears where it is useful
     /// rather than sitting on every row as a standing invitation.
@@ -87,35 +87,45 @@ struct LauncherView: View {
             Text("Open a project, or start a new one.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+
+            // Offered only once there is a list worth narrowing. A search field
+            // above a single project is furniture.
+            if projects.count > 1 { searchField }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
     }
 
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search projects…", text: $searchTerm)
+                .textFieldStyle(.plain)
+            if !searchTerm.isEmpty {
+                Button {
+                    searchTerm = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .accessibilityLabel("Clear the search")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.quinary, in: RoundedRectangle(cornerRadius: 6))
+        .padding(.top, 10)
+    }
+
     @ViewBuilder
     private var content: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if projects.isEmpty {
-                    Text("No projects yet.")
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 8)
+            VStack(alignment: .leading, spacing: 0) {
+                if listed.isEmpty {
+                    emptyState
                 } else {
-                    section("RECENT", projects: recents)
-
-                    // Only worth offering once there is something it would
-                    // actually reveal.
-                    if !others.isEmpty {
-                        DisclosureGroup(isExpanded: $showsAllProjects) {
-                            VStack(spacing: 0) {
-                                ForEach(others) { row(for: $0) }
-                            }
-                        } label: {
-                            Text("All Projects (\(others.count) more)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                    ForEach(listed) { row(for: $0) }
                 }
             }
             .padding(.horizontal, 20)
@@ -126,29 +136,21 @@ struct LauncherView: View {
         actions
     }
 
-    /// The recents that still exist. A project opened once and then deleted
-    /// from the folder simply stops being offered.
-    private var recents: [Project] {
-        let resolved = launch.recents.resolve(against: projects)
-        // Nothing opened yet on this machine -- a shared or restored folder --
-        // so the whole list is the best "recent" there is.
-        return resolved.isEmpty ? projects : resolved
+    /// Every project, recently opened ones first, narrowed by the search field.
+    /// One list: the recents are worth putting at the top, but not worth a
+    /// heading and a disclosure triangle between you and the rest.
+    private var listed: [Project] {
+        ProjectListing.ordered(
+            projects, recentIDs: launch.recents.projectIDs, matching: searchTerm
+        )
     }
 
-    private var others: [Project] {
-        let shown = Set(recents.map(\.id))
-        return projects.filter { !shown.contains($0.id) }
-    }
-
-    private func section(_ title: String, projects: [Project]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            VStack(spacing: 0) {
-                ForEach(projects) { row(for: $0) }
-            }
-        }
+    /// Two emptinesses, and they call for different things: make a project, or
+    /// clear what you typed.
+    private var emptyState: some View {
+        Text(projects.isEmpty ? "No projects yet." : "No project matches “\(searchTerm)”.")
+            .foregroundStyle(.secondary)
+            .padding(.top, 8)
     }
 
     private func row(for project: Project) -> some View {

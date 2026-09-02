@@ -2,16 +2,13 @@ import Foundation
 import Testing
 @testable import requester
 
-/// The launcher's list comes straight from here, so ordering and the guards
-/// against listing a project that no longer exists are what matter.
+/// This remembers ids and their order, nothing more -- turning them into the
+/// launcher's list is `ProjectListing`'s job, and is tested there. So what
+/// matters here is recency order, the cap, and that it survives a restart.
 @MainActor
 struct RecentProjectsStoreTests {
     private func makeDefaults() -> UserDefaults {
         UserDefaults(suiteName: "requester-tests-\(UUID().uuidString)")!
-    }
-
-    private func project(_ id: String, name: String) -> Project {
-        Project(id: id, name: name)
     }
 
     @Test func ordersMostRecentlyOpenedFirst() {
@@ -81,24 +78,5 @@ struct RecentProjectsStoreTests {
 
         // Assert -- a fresh store over the same defaults sees nothing
         #expect(RecentProjectsStore(defaults: defaults).projectIDs.isEmpty)
-    }
-
-    /// A remembered id is a hint: the data folder may have been swapped or
-    /// edited by hand, and a row that cannot be opened is worse than no row.
-    @Test func resolvesOnlyProjectsThatStillExist() {
-        // Arrange
-        let defaults = makeDefaults()
-        defer { defaults.removePersistentDomain(forName: defaults.description) }
-        let store = RecentProjectsStore(defaults: defaults)
-        store.markOpened("gone")
-        store.markOpened("kept")
-
-        // Act
-        let resolved = store.resolve(
-            against: [project("kept", name: "Kept"), project("never-opened", name: "Other")]
-        )
-
-        // Assert -- recency order, and the missing one simply absent
-        #expect(resolved.map(\.id) == ["kept"])
     }
 }

@@ -15,8 +15,10 @@ import Foundation
 final class RecentProjectsStore {
     private static let key = "recentProjectIDs"
 
-    /// Enough to fill the launcher's short list without it becoming a second,
-    /// worse project browser -- everything else is behind "All Projects".
+    /// How many openings are worth remembering. The launcher lists every
+    /// project, so this decides only how far down the list recency reaches:
+    /// the most recent few lead, and everything past this falls back to
+    /// alphabetical order -- which is where the search field takes over.
     static let limit = 8
 
     private let defaults: UserDefaults
@@ -47,16 +49,5 @@ final class RecentProjectsStore {
             return
         }
         defaults.set(ids, forKey: Self.key)
-    }
-
-    /// The recents that still exist, in recency order.
-    ///
-    /// The data folder can be swapped, edited by hand, or shared from a machine
-    /// where different projects were opened, so a remembered id is a hint and
-    /// never a promise -- anything that no longer resolves is dropped rather
-    /// than shown as a row that cannot be opened.
-    func resolve(against existing: [Project]) -> [Project] {
-        let byID = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return projectIDs.compactMap { byID[$0] }
     }
 }

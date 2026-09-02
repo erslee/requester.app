@@ -9,11 +9,12 @@ Built with SwiftUI and Swift 6 strict concurrency. **No third-party dependencies
 
 ## Features
 
-**One project per window** — The app opens on a launcher listing the projects you
-opened most recently, with the rest behind *All Projects*. Picking one opens it in its
-own window, titled with the project's name; asking for the same project again focuses
-the window it is already in rather than opening a second. **⌘N** makes a new project in
-a new window, **⌘O** brings the launcher back.
+**One project per window** — The app opens on a launcher listing every project in one
+list, the ones you opened most recently first and the rest alphabetically, with a search
+field to narrow it by name. Picking one opens it in its own window, titled with the
+project's name; asking for the same project again focuses the window it is already in
+rather than opening a second. **⌘N** makes a new project in a new window, **⌘O** brings
+the launcher back.
 
 **Requests** — Params, Headers, Body (raw / form / GraphQL), Auth (basic, bearer,
 API key), and a post-response script, per request. Method, URL, and everything else
@@ -171,7 +172,7 @@ xcodebuild -project requester.xcodeproj -scheme requester \
            -destination 'platform=macOS' test
 ```
 
-309 unit tests (Swift Testing) covering the curl importer and exporter (which are tested
+318 unit tests (Swift Testing) covering the curl importer and exporter (which are tested
 against each other, so the two cannot drift), shell quoting, the relaxed-JSON paste
 repair, collection import, variable resolution, request building, history storage and
 reconciliation, the used-order lookup behind the History tab, timeline spans (redirects,
