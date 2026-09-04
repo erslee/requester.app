@@ -55,9 +55,11 @@ struct ResponsePanelView: View {
     /// and what the gutter numbers from.
     @State private var projection = FoldableText.plain("").projected(folding: [])
 
-    /// Long lines run off to the side rather than wrapping, so one line of the
-    /// response is always one row in the gutter.
-    @State private var wrapsLines = false
+    /// Long lines wrap, so a response is readable without scrolling sideways
+    /// for it. A wrapped source line is then several rows tall and its number
+    /// sits on the first of them; the toggle turns that off for reading a body
+    /// where one line to one row matters.
+    @State private var wrapsLines = true
 
     private enum BodyFormat: String, CaseIterable, Identifiable {
         case pretty = "Pretty"
