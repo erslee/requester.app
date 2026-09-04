@@ -17,7 +17,23 @@ final class EditorModel {
 
     var knownVariableNames: Set<String> = []
     var isSending = false
-    var lastEntry: HistoryEntry?
+
+    /// The response on screen: the send that just finished, or the past one
+    /// that was opened. Every entry that reaches it is also filed under its
+    /// request, so leaving that request and coming back brings it with you.
+    var lastEntry: HistoryEntry? {
+        didSet {
+            guard let entry = lastEntry, let requestID = entry.requestID else { return }
+            lastEntryByRequestID[requestID] = entry
+        }
+    }
+
+    /// The response last shown for each request, by request id.
+    ///
+    /// Held for the window's lifetime rather than written anywhere: this is
+    /// about not losing what is on screen, and a request opened in a fresh
+    /// window has nothing on screen to lose.
+    private var lastEntryByRequestID: [String: HistoryEntry] = [:]
 
     /// The stage the send in flight is currently in, and when it started --
     /// what the response panel names and times while it runs. Both are cleared
@@ -53,11 +69,12 @@ final class EditorModel {
         RequestNaming.derivedName(fromURL: draft?.url ?? "")
     }
 
+    /// Opens a saved request, with whatever response it last had on screen.
     func load(_ request: APIRequest) {
         autosaveTask?.cancel()
         draft = request
         saved = request
-        lastEntry = nil
+        lastEntry = lastEntryByRequestID[request.id]
     }
 
     /// Loads what a history entry actually sent -- resolved URL, the real

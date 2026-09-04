@@ -445,9 +445,10 @@ final class AppModel {
                         self.historyPanel.selectedEntryID = pending.id
                     } else {
                         self.editor.load(request)
-                        // No past response is shown until one is asked for, so
-                        // no history row is marked active either.
-                        self.historyPanel.selectedEntryID = nil
+                        // The panel follows the response the editor came back
+                        // with: the one this request last had on screen, or
+                        // none at all if it has not been sent or opened yet.
+                        self.historyPanel.selectedEntryID = self.editor.lastEntry?.id
                     }
                 }
                 await historyPanel.showRequest(projectID: projectID, requestID: requestID)
