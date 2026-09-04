@@ -17,7 +17,7 @@ struct CodeEditor: NSViewRepresentable {
 
     /// Line numbers and fold triangles down the left. Nil -- the default, and
     /// what every editable editor uses -- shows no gutter at all.
-    var gutter: LineNumberRuler.Source?
+    var gutter: LineNumberGutter.Source?
 
     /// Called with the source line whose fold triangle was clicked.
     var onToggleFold: ((Int) -> Void)?
@@ -39,45 +39,12 @@ struct CodeEditor: NSViewRepresentable {
     /// shaded apart from the others.
     var highlightedMatch: NSRange?
 
-    /// The AppKit half of the editor: a text view inside a scroll view, set up
-    /// the way every editor here needs it.
-    ///
-    /// Static, and free of the coordinator and of SwiftUI, so the geometry it
-    /// produces -- where the text begins once a gutter has taken its width --
-    /// can be built and measured in a test.
-    static func makeScrollView(isEditable: Bool) -> (NSScrollView, PastingTextView) {
-        let textView = PastingTextView()
-        textView.isEditable = isEditable
-        textView.isRichText = false
-        textView.allowsUndo = isEditable
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.font = font
-        textView.textContainerInset = CGSize(width: 6, height: 8)
-        textView.drawsBackground = false
-        textView.autoresizingMask = [.width]
-        textView.isVerticallyResizable = true
-
-        let scrollView = NSScrollView()
-        scrollView.documentView = textView
-        scrollView.hasVerticalScroller = true
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-
-        for axis in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
-            scrollView.setContentHuggingPriority(.defaultLow, for: axis)
-            scrollView.setContentCompressionResistancePriority(.defaultLow, for: axis)
-        }
-        return (scrollView, textView)
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let (scrollView, textView) = Self.makeScrollView(isEditable: isEditable)
+    func makeNSView(context: Context) -> GutteredEditor {
+        let editor = GutteredEditor(isEditable: isEditable)
+        let textView = editor.textView
         textView.delegate = context.coordinator
         textView.repairsPastedJSON = options.json
-        Self.setWraps(wrapsLines, width: unwrappedWidth, on: textView, in: scrollView)
+        editor.setWraps(wrapsLines, unwrappedWidth: unwrappedWidth)
 
         context.coordinator.textView = textView
 
@@ -91,8 +58,10 @@ struct CodeEditor: NSViewRepresentable {
         context.coordinator.onToggleFold = onToggleFold
         textView.string = text
         context.coordinator.displayedText = text
-        syncGutter(on: scrollView, coordinator: context.coordinator)
-        return scrollView
+        editor.setGutter(gutter) { [weak coordinator = context.coordinator] line in
+            coordinator?.onToggleFold?(line)
+        }
+        return editor
     }
 
     /// Fills whatever it is offered, and never reports an intrinsic size: the
@@ -106,7 +75,7 @@ struct CodeEditor: NSViewRepresentable {
     /// AppKit into a recursive layout pass that overflows the stack and kills
     /// the process. Only finite, positive values are passed through.
     func sizeThatFits(
-        _ proposal: ProposedViewSize, nsView: NSScrollView, context: Context
+        _ proposal: ProposedViewSize, nsView: GutteredEditor, context: Context
     ) -> CGSize? {
         CGSize(
             width: Self.usableLength(proposal.width, whenUnusable: 360),
@@ -119,8 +88,8 @@ struct CodeEditor: NSViewRepresentable {
         return value
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? PastingTextView else { return }
+    func updateNSView(_ editor: GutteredEditor, context: Context) {
+        let textView = editor.textView
         context.coordinator.text = $text
         context.coordinator.indentsAutomatically = indentsAutomatically
         // The body's type picker can switch to JSON while the editor is open.
@@ -128,7 +97,7 @@ struct CodeEditor: NSViewRepresentable {
         context.coordinator.onToggleFold = onToggleFold
         textView.isEditable = isEditable
         textView.allowsUndo = isEditable
-        Self.setWraps(wrapsLines, width: unwrappedWidth, on: textView, in: scrollView)
+        editor.setWraps(wrapsLines, unwrappedWidth: unwrappedWidth)
 
         // Only push text in when it changed outside the editor (a request was
         // loaded, a curl command imported, a block was collapsed) -- otherwise
@@ -152,59 +121,9 @@ struct CodeEditor: NSViewRepresentable {
 
         // The gutter draws from the projection, so it is refreshed whenever the
         // text it numbers might have moved. Redrawing costs a screenful.
-        syncGutter(on: scrollView, coordinator: context.coordinator)
-    }
-
-    /// Brings the gutter into line with what the caller is asking for.
-    ///
-    /// Both directions matter, and neither is a one-off at construction time:
-    /// a response switched to Raw stops wanting one, and a body that is only
-    /// JSON on the second send starts wanting one. A ruler left installed with
-    /// no source would keep its width and its separator line down the left of
-    /// a view that no longer numbers anything.
-    private func syncGutter(on scrollView: NSScrollView, coordinator: Coordinator) {
-        Self.syncGutter(gutter, on: scrollView) { [weak coordinator] line in
+        editor.setGutter(gutter) { [weak coordinator = context.coordinator] line in
             coordinator?.onToggleFold?(line)
         }
-    }
-
-    /// Static half of the above, so a test can drive the same install.
-    static func syncGutter(
-        _ gutter: LineNumberRuler.Source?,
-        on scrollView: NSScrollView,
-        onToggleFold: @escaping (Int) -> Void
-    ) {
-        guard gutter != nil else {
-            // Hiding the rulers re-tiles, which is what gives the width back to
-            // the text rather than leaving an empty strip.
-            scrollView.rulersVisible = false
-            return
-        }
-
-        if scrollView.verticalRulerView as? LineNumberRuler == nil {
-            // Order matters: a ruler assigned while the scroll view has no
-            // vertical ruler is dropped on the floor, and the space for it is
-            // only reserved once both flags are on.
-            scrollView.hasVerticalRuler = true
-            let ruler = LineNumberRuler(scrollView: scrollView)
-            ruler.onToggleFold = onToggleFold
-            scrollView.verticalRulerView = ruler
-        }
-
-        let wasHidden = !scrollView.rulersVisible
-        scrollView.rulersVisible = true
-        let ruler = scrollView.verticalRulerView as? LineNumberRuler
-        ruler?.source = gutter
-
-        // Showing the rulers again re-takes the gutter's width as a left inset
-        // on the clip view, but the document is still at the offset it had
-        // while there was none -- which is now the position where the gutter
-        // covers the start of every line. The ruler survives the round trip
-        // with its thickness unchanged, so nothing on the re-tile path puts it
-        // back. Only the transition does this: a reader who has scrolled
-        // sideways through an unwrapped body must not be dragged to column 0
-        // by an ordinary redraw.
-        if wasHidden { ruler?.returnToStartOfLine() }
     }
 
     /// Beyond this, a line is wrapped whatever the caller asked for. Only the
@@ -213,44 +132,6 @@ struct CodeEditor: NSViewRepresentable {
     /// lazy at any width short of that, so the limit is deliberately far above
     /// anything a formatted response produces.
     static let widestUnwrappedLine: CGFloat = 1_000_000
-
-    /// Turns wrapping on or off without giving up viewport layout.
-    ///
-    /// The container's width must stay **bounded**. Handing it
-    /// `greatestFiniteMagnitude` -- the conventional recipe for a non-wrapping
-    /// text view -- makes TextKit lay out every paragraph in the document to
-    /// discover how wide the widest one is: measured at 3.3 seconds for a 2 MB
-    /// response, against 4 ms. So the container keeps tracking the text view,
-    /// and the *text view* is widened instead, to a width the caller already
-    /// knows from its line index.
-    ///
-    /// Nothing here assigns `container.size` or asks the text view to size
-    /// itself to its text. Both would make TextKit measure the whole document,
-    /// and the first also fights the tracking that derives the container width
-    /// from the view's -- they disagree by the text container inset, so every
-    /// update would overwrite what the last layout pass had just worked out.
-    static func setWraps(
-        _ wraps: Bool, width contentWidth: CGFloat,
-        on textView: NSTextView, in scrollView: NSScrollView
-    ) {
-        guard let container = textView.textContainer else { return }
-        let wrapped = wraps || contentWidth > widestUnwrappedLine
-        let width = wrapped
-            ? scrollView.contentSize.width
-            : max(contentWidth, scrollView.contentSize.width)
-
-        guard textView.isHorizontallyResizable == wrapped
-            || abs(textView.frame.width - width) > 0.5
-        else { return }
-
-        container.widthTracksTextView = true
-        textView.isHorizontallyResizable = false
-        // A wrapped view follows the scroll view's width; a widened one must
-        // not be pulled back to it on the next resize.
-        textView.autoresizingMask = wrapped ? [.width] : []
-        textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
-        scrollView.hasHorizontalScroller = !wrapped
-    }
 
     /// Width the text needs when it is not wrapped. The editors are monospaced,
     /// so the longest line's character count is the document's width -- no
@@ -307,7 +188,7 @@ struct CodeEditor: NSViewRepresentable {
 
         /// The projection currently on screen, needed to read a scroll position
         /// as a line of the original and to put it back afterwards.
-        var gutter: LineNumberRuler.Source?
+        var gutter: LineNumberGutter.Source?
 
         weak var textView: NSTextView?
 
@@ -432,7 +313,7 @@ struct CodeEditor: NSViewRepresentable {
         /// Applies a fold as an edit to the region it changed, returning false
         /// when the text did not come from the same document and has to be
         /// swapped wholesale instead.
-        func applyFold(to gutter: LineNumberRuler.Source?, in textView: NSTextView) -> Bool {
+        func applyFold(to gutter: LineNumberGutter.Source?, in textView: NSTextView) -> Bool {
             guard let gutter, let previous = self.gutter,
                   previous.document.id == gutter.document.id,
                   let contentStorage = textView.textContentStorage,
@@ -490,6 +371,166 @@ struct CodeEditor: NSViewRepresentable {
             }
             layoutManager.invalidateLayout(for: layoutManager.documentRange)
         }
+    }
+}
+
+/// The AppKit half of the editor: a text view in a scroll view, with the line
+/// number gutter as its neighbour rather than as a layer over the top of it.
+///
+/// The layout is the whole point of the class. AppKit's own answer -- an
+/// `NSRulerView` -- reserves the gutter's width as a *left content inset* on a
+/// clip view that stays full width, so the numbers are painted over the text
+/// and the text only clears them at the one scroll position where the document
+/// sits at minus that inset. Sideways scrolling leaves it elsewhere, and so
+/// does any resize that re-clamps the scroll offset, which is how the first
+/// characters of every line kept disappearing under the numbers. Here the
+/// scroll view is genuinely narrower, so there is no offset at which the two
+/// can overlap and no arithmetic keeping them apart.
+///
+/// Free of SwiftUI, so the geometry it produces can be built and measured in a
+/// test.
+final class GutteredEditor: NSView {
+    let scrollView: NSScrollView
+    let textView: PastingTextView
+
+    /// Created on demand and kept afterwards, since a body switched to Raw and
+    /// back wants the same gutter rather than a new one. Nil source is what
+    /// takes its width away.
+    private var gutter: LineNumberGutter?
+
+    /// What `setWraps` was last told, re-applied on every layout: an unwrapped
+    /// text view does not follow its clip view's width, so a window growing
+    /// wider than the document would otherwise leave a dead strip beside it.
+    private var wrapsLines = true
+    private var unwrappedWidth: CGFloat = 0
+
+    init(isEditable: Bool) {
+        textView = PastingTextView()
+        textView.isEditable = isEditable
+        textView.isRichText = false
+        textView.allowsUndo = isEditable
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.font = CodeEditor.font
+        textView.textContainerInset = CGSize(width: 6, height: 8)
+        textView.drawsBackground = false
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+
+        scrollView = NSScrollView()
+        scrollView.documentView = textView
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+
+        super.init(frame: .zero)
+        addSubview(scrollView)
+
+        for axis in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
+            setContentHuggingPriority(.defaultLow, for: axis)
+            setContentCompressionResistancePriority(.defaultLow, for: axis)
+        }
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    // MARK: - Layout
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
+
+    /// The gutter takes the width it needs from the left, the scroll view takes
+    /// the rest. The gutter is matched to the *clip* view rather than to the
+    /// whole scroll view, so it stops where the text does instead of running
+    /// down beside a horizontal scroller.
+    override func layout() {
+        super.layout()
+        let width = gutter?.thickness ?? 0
+        scrollView.frame = NSRect(
+            x: width, y: 0, width: max(bounds.width - width, 0), height: bounds.height
+        )
+        if let gutter {
+            let content = convert(scrollView.contentView.frame, from: scrollView)
+            gutter.frame = NSRect(
+                x: 0, y: content.minY, width: width, height: content.height
+            )
+        }
+        applyWrapping()
+    }
+
+    // MARK: - Gutter
+
+    /// Brings the gutter into line with what the caller is asking for.
+    ///
+    /// Both directions matter, and neither is a one-off at construction time:
+    /// a response switched to Raw stops wanting one, and a body that is only
+    /// JSON on the second send starts wanting one.
+    func setGutter(_ source: LineNumberGutter.Source?, onToggleFold: @escaping (Int) -> Void) {
+        guard source != nil || gutter != nil else { return }
+
+        let gutter = self.gutter ?? {
+            let gutter = LineNumberGutter(scrollView: scrollView)
+            addSubview(gutter)
+            self.gutter = gutter
+            return gutter
+        }()
+
+        gutter.onToggleFold = onToggleFold
+        gutter.isHidden = source == nil
+        // Assigning the source is what asks for a re-layout, and only when the
+        // width it needs actually changed.
+        gutter.source = source
+    }
+
+    // MARK: - Wrapping
+
+    /// Turns wrapping on or off without giving up viewport layout.
+    ///
+    /// The container's width must stay **bounded**. Handing it
+    /// `greatestFiniteMagnitude` -- the conventional recipe for a non-wrapping
+    /// text view -- makes TextKit lay out every paragraph in the document to
+    /// discover how wide the widest one is: measured at 3.3 seconds for a 2 MB
+    /// response, against 4 ms. So the container keeps tracking the text view,
+    /// and the *text view* is widened instead, to a width the caller already
+    /// knows from its line index.
+    ///
+    /// Nothing here assigns `container.size` or asks the text view to size
+    /// itself to its text. Both would make TextKit measure the whole document,
+    /// and the first also fights the tracking that derives the container width
+    /// from the view's -- they disagree by the text container inset, so every
+    /// update would overwrite what the last layout pass had just worked out.
+    func setWraps(_ wraps: Bool, unwrappedWidth: CGFloat) {
+        wrapsLines = wraps
+        self.unwrappedWidth = unwrappedWidth
+        applyWrapping()
+    }
+
+    private func applyWrapping() {
+        guard let container = textView.textContainer else { return }
+        let wrapped = wrapsLines || unwrappedWidth > CodeEditor.widestUnwrappedLine
+        // The visible width, now that the gutter is no longer taken out of it
+        // as an inset -- so a wrapped line breaks where the reader can see it
+        // break, rather than a gutter's width further right.
+        let width = wrapped
+            ? scrollView.contentSize.width
+            : max(unwrappedWidth, scrollView.contentSize.width)
+
+        guard textView.isHorizontallyResizable == wrapped
+            || abs(textView.frame.width - width) > 0.5
+        else { return }
+
+        container.widthTracksTextView = true
+        textView.isHorizontallyResizable = false
+        // A wrapped view follows the scroll view's width; a widened one must
+        // not be pulled back to it on the next resize.
+        textView.autoresizingMask = wrapped ? [.width] : []
+        textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+        scrollView.hasHorizontalScroller = !wrapped
     }
 }
 

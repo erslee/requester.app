@@ -3,12 +3,21 @@ import AppKit
 /// The gutter down the left of a code editor: the line number of every row on
 /// screen, and a triangle on each row that opens a block worth collapsing.
 ///
+/// A plain view laid out *beside* the scroll view rather than an `NSRulerView`.
+/// AppKit reserves a ruler's width as a left content inset on a clip view that
+/// stays full width, so the ruler is painted over the text and the text is
+/// clear of it at exactly one scroll position -- the leftmost. Every other
+/// position, which is any sideways scroll and any resize that re-clamps one,
+/// slides the first characters of every line underneath the numbers. Two views
+/// side by side cannot overlap at any offset, so none of that arithmetic
+/// exists here.
+///
 /// It never walks the document. TextKit is asked which layout fragments cover
 /// the visible rectangle -- a screenful, whatever the response weighs -- and
 /// each one's offset is turned into a line number by a binary search into the
 /// projection. Numbers are the *source* line, so a row after a collapsed block
 /// reports the line it really is rather than its position on screen.
-final class LineNumberRuler: NSRulerView {
+final class LineNumberGutter: NSView {
     /// Everything the gutter draws from, replaced wholesale when the text does.
     struct Source {
         var document: FoldableText
@@ -22,7 +31,11 @@ final class LineNumberRuler: NSRulerView {
 
     var source: Source? {
         didSet {
-            invalidateThickness()
+            // The width follows the highest line number, so a new document can
+            // need a different one and the container has to lay out again.
+            if thickness(for: source) != thickness(for: oldValue) {
+                superview?.needsLayout = true
+            }
             needsDisplay = true
         }
     }
@@ -37,17 +50,21 @@ final class LineNumberRuler: NSRulerView {
         ofSize: NSFont.smallSystemFontSize, weight: .regular
     )
 
-    init(scrollView: NSScrollView) {
-        super.init(scrollView: scrollView, orientation: .verticalRuler)
-        clientView = scrollView.documentView
+    /// The editor being numbered. Weak, and read through rather than copied
+    /// from, so the gutter always draws against the scroll position of the
+    /// moment.
+    private weak var scrollView: NSScrollView?
 
-        // AppKit views do not clip to their bounds by default, and a ruler's
-        // frame follows the document -- without this the gutter paints over the
-        // whole window.
+    init(scrollView: NSScrollView) {
+        self.scrollView = scrollView
+        super.init(frame: .zero)
+
+        // AppKit views do not clip to their bounds by default, and a number
+        // near the edge would otherwise paint out over the text.
         clipsToBounds = true
 
-        // Rulers are not redrawn by scrolling on their own, so the gutter
-        // follows the clip view's bounds instead.
+        // Nothing redraws a sibling of the clip view when the document moves
+        // under it, so the gutter follows the clip view's bounds itself.
         scrollView.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(
             self,
@@ -64,63 +81,34 @@ final class LineNumberRuler: NSRulerView {
         needsDisplay = true
     }
 
+    /// Numbers count downwards, like the text view they sit against.
+    override var isFlipped: Bool { true }
+
     // MARK: - Size
 
     /// Wide enough for the highest line number the document can show, so the
     /// text does not shift sideways as the reader scrolls into five digits.
     ///
-    /// The scroll view is re-tiled whenever that width changes. It insets its
-    /// content view by the thickness it last tiled at, not by the current one,
-    /// so a gutter that grew past it -- which is every gutter, since AppKit
-    /// starts at 16pt and two digits already need more -- would paint over the
-    /// first characters of every line.
-    private func invalidateThickness() {
-        let digits = max(String(source?.document.lineCount ?? 1).count, 2)
+    /// Zero without a source: a gutter with nothing to number takes no width,
+    /// which is how the raw view of a response gives it all back to the text.
+    var thickness: CGFloat { thickness(for: source) }
+
+    private func thickness(for source: Source?) -> CGFloat {
+        guard let source else { return 0 }
+        let digits = max(String(source.document.lineCount).count, 2)
         let width = ("0" as NSString)
             .size(withAttributes: [.font: Self.font]).width * CGFloat(digits)
-        let controls = (source?.showsFoldControls ?? false) ? Self.foldControlWidth : 0
-        let thickness = (width + controls + Self.horizontalPadding * 2).rounded(.up)
-
-        guard abs(thickness - ruleThickness) > 0.5 else { return }
-        ruleThickness = thickness
-        // Tiling lays out the document, so it is only worth doing on a real
-        // change -- and the guard above is what keeps this off the path of
-        // every scroll and every redraw.
-        scrollView?.tile()
-        returnToStartOfLine()
-    }
-
-    /// Puts the document back against the start of its lines after a re-tile.
-    ///
-    /// Room for the gutter is reserved as a *left content inset* on the clip
-    /// view, not by narrowing it -- so the leftmost scroll position is minus
-    /// that inset, and `x = 0` is the position where the gutter covers the
-    /// first characters of every line. A document nobody has scrolled sits at
-    /// 0 until something moves it, which is why the text arrived clipped and
-    /// a short line -- the `[` opening a JSON array -- vanished entirely.
-    ///
-    /// Only the horizontal offset is touched: the row the reader is on is
-    /// worth keeping, the column they never chose is not.
-    ///
-    /// Not private: a gutter switched off and back on again -- Raw, then
-    /// Pretty -- re-takes its inset without ever changing thickness, so the
-    /// install path has to ask for this rather than reaching it through a
-    /// re-tile.
-    func returnToStartOfLine() {
-        guard let clipView = scrollView?.contentView else { return }
-        let start = -clipView.contentInsets.left
-        guard abs(clipView.bounds.origin.x - start) > 0.5 else { return }
-        clipView.scroll(to: NSPoint(x: start, y: clipView.bounds.origin.y))
-        scrollView?.reflectScrolledClipView(clipView)
+        let controls = source.showsFoldControls ? Self.foldControlWidth : 0
+        return (width + controls + Self.horizontalPadding * 2).rounded(.up)
     }
 
     // MARK: - Drawing
 
-    override func drawHashMarksAndLabels(in rect: NSRect) {
+    override func draw(_ dirtyRect: NSRect) {
         NSColor.separatorColor.withAlphaComponent(0.5).setStroke()
         let edge = NSBezierPath()
-        edge.move(to: CGPoint(x: bounds.maxX - 0.5, y: rect.minY))
-        edge.line(to: CGPoint(x: bounds.maxX - 0.5, y: rect.maxY))
+        edge.move(to: CGPoint(x: bounds.maxX - 0.5, y: dirtyRect.minY))
+        edge.line(to: CGPoint(x: bounds.maxX - 0.5, y: dirtyRect.maxY))
         edge.lineWidth = 1
         edge.stroke()
 
@@ -167,8 +155,8 @@ final class LineNumberRuler: NSRulerView {
             triangle.line(to: CGPoint(x: box.maxX, y: box.midY))
             triangle.line(to: CGPoint(x: box.minX, y: box.maxY))
         } else {
-            // Pointing down. The ruler inherits the text view's flipped
-            // coordinates, so "down" is the larger y.
+            // Pointing down. The gutter is flipped like the text view, so
+            // "down" is the larger y.
             triangle.move(to: CGPoint(x: box.minX, y: box.minY))
             triangle.line(to: CGPoint(x: box.maxX, y: box.minY))
             triangle.line(to: CGPoint(x: box.midX, y: box.maxY))
@@ -176,6 +164,17 @@ final class LineNumberRuler: NSRulerView {
         triangle.close()
         NSColor.tertiaryLabelColor.setFill()
         triangle.fill()
+    }
+
+    // MARK: - Scrolling
+
+    /// A wheel or trackpad gesture over the numbers scrolls the text, as it
+    /// did while the gutter was inside the scroll view. Nothing routes it there
+    /// now that the two are siblings -- the responder chain goes up to the
+    /// container, not across -- so it is handed over by hand.
+    override func scrollWheel(with event: NSEvent) {
+        guard let scrollView else { return super.scrollWheel(with: event) }
+        scrollView.scrollWheel(with: event)
     }
 
     // MARK: - Folding
@@ -204,17 +203,19 @@ final class LineNumberRuler: NSRulerView {
     private func enumerateVisibleRows(
         _ body: (_ sourceLine: Int, _ isFoldable: Bool, _ rowRect: NSRect) -> Void
     ) {
-        guard let textView = clientView as? NSTextView,
+        guard let scrollView,
+              let textView = scrollView.documentView as? NSTextView,
               let layoutManager = textView.textLayoutManager,
               let contentStorage = textView.textContentStorage,
-              let source,
-              let visible = scrollView?.contentView.bounds
+              let source
         else { return }
 
         // Fragment frames are in the text container's space; the text view
-        // insets them, and the ruler sits in a third space of its own.
+        // insets them, and the gutter sits in a third space of its own -- one
+        // the scrolling never moves, which is what the conversion crosses.
+        let visible = scrollView.contentView.bounds
         let inset = textView.textContainerInset.height
-        let rulerOrigin = convert(NSPoint.zero, from: textView).y
+        let gutterOrigin = convert(NSPoint.zero, from: textView).y
         let top = visible.minY - inset
 
         guard let first = layoutManager.textLayoutFragment(for: CGPoint(x: 0, y: max(top, 0)))
@@ -241,7 +242,7 @@ final class LineNumberRuler: NSRulerView {
                 isFoldable,
                 NSRect(
                     x: 0,
-                    y: frame.minY + inset + rulerOrigin,
+                    y: frame.minY + inset + gutterOrigin,
                     width: self.bounds.width,
                     // A wrapped paragraph is one tall fragment: the number
                     // belongs on its first row, not centred over all of them.

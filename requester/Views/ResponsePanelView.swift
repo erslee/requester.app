@@ -488,7 +488,7 @@ struct ResponsePanelView: View {
 
     /// The gutter, and `nil` for the raw view -- which is the whole point of
     /// asking for raw: the body as it arrived, unnumbered and uncoloured.
-    private var gutter: LineNumberRuler.Source? {
+    private var gutter: LineNumberGutter.Source? {
         guard isPretty else { return nil }
         return .init(
             document: document,

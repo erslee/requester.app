@@ -5,132 +5,47 @@ import Testing
 /// Where the response body's text actually lands once the line-number gutter
 /// has taken its width.
 ///
-/// The bug this guards: AppKit reserves room for a ruler as a *left content
-/// inset* on the clip view rather than by narrowing it, so the leftmost scroll
-/// position is minus that inset and plain `0` is the position where the gutter
-/// covers the start of every line. A document nobody has scrolled sits at 0,
-/// so the text arrived clipped -- the first characters of each line hidden,
-/// and a one-character line gone altogether. None of that shows in the text
-/// itself; it is purely where the views ended up, so it is measured here.
+/// The bug this guards: as an `NSRulerView`, the gutter's width was reserved as
+/// a *left content inset* on a clip view that stayed full width, so the numbers
+/// were painted over the text and the text only cleared them at the one scroll
+/// position where the document sat at minus that inset. Scrolling sideways --
+/// which is the response body's default, since its lines do not wrap -- put the
+/// first characters of every line underneath the numbers, and so did any window
+/// resize that re-clamped the scroll offset.
+///
+/// The gutter is a neighbour of the scroll view now, so the two cannot overlap
+/// at any offset. None of that shows in the text itself; it is purely where the
+/// views ended up, so it is measured here.
 @MainActor
 struct GutterGeometryTests {
     /// The editor as `CodeEditor` assembles it, showing a numbered body long
-    /// enough that the gutter is wider than the 16pt AppKit starts with.
-    private func makeEditor(lines: Int) -> NSScrollView {
-        let (scrollView, textView) = CodeEditor.makeScrollView(isEditable: false)
-        scrollView.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+    /// enough that the gutter is wider than the 16pt AppKit used to start with,
+    /// and wide enough that it has somewhere to scroll sideways to.
+    private func makeEditor(lines: Int, width: CGFloat = 600) -> GutteredEditor {
+        let editor = GutteredEditor(isEditable: false)
+        editor.frame = NSRect(x: 0, y: 0, width: width, height: 400)
 
-        let text = (1...lines).map { "  \"key_\($0)\": \($0)," }.joined(separator: "\n")
-        textView.string = text
+        let text = (1...lines)
+            .map { "  \"key_\($0)\": \"a value long enough to run off the side\"," }
+            .joined(separator: "\n")
+        editor.textView.string = text
 
         let document = FoldableText.plain(text)
         let projection = document.projected(folding: [])
-        CodeEditor.setWraps(
-            false,
-            width: CodeEditor.unwrappedWidth(longestLineLength: projection.longestLineLength),
-            on: textView,
-            in: scrollView
+        editor.setWraps(
+            false, unwrappedWidth: CodeEditor.unwrappedWidth(
+                longestLineLength: projection.longestLineLength
+            )
         )
-        scrollView.layoutSubtreeIfNeeded()
-
-        CodeEditor.syncGutter(
-            .init(
-                document: document, projection: projection, folded: [], showsFoldControls: false
-            ),
-            on: scrollView,
-            onToggleFold: { _ in }
-        )
-        scrollView.layoutSubtreeIfNeeded()
-        return scrollView
-    }
-
-    private func ruler(of scrollView: NSScrollView) throws -> LineNumberRuler {
-        try #require(scrollView.verticalRulerView as? LineNumberRuler)
-    }
-
-    /// The gutter has to be wider than AppKit's default reservation for any of
-    /// this to matter -- three digits and a margin already are.
-    @Test func theGutterReservesItsOwnWidth() throws {
-        // Arrange / Act
-        let scrollView = makeEditor(lines: 400)
-
-        // Assert
-        let gutter = try ruler(of: scrollView)
-        #expect(gutter.ruleThickness > 16)
-        #expect(scrollView.contentView.contentInsets.left == gutter.ruleThickness)
-    }
-
-    /// The first characters of every line have to be on screen. Nobody
-    /// scrolled, so the document belongs at the start of its lines -- which,
-    /// with a left inset, is the *negative* of that inset and not zero.
-    @Test func theDocumentStaysAtTheStartOfItsLines() throws {
-        // Arrange / Act
-        let scrollView = makeEditor(lines: 400)
-
-        // Assert
-        let clipView = scrollView.contentView
-        #expect(clipView.bounds.origin.x == -clipView.contentInsets.left)
-    }
-
-    /// The same fact stated the way a reader would check it: the text view's
-    /// own left edge sits to the right of the gutter, not underneath it.
-    @Test func theTextBeginsAfterTheGutter() throws {
-        // Arrange / Act
-        let scrollView = makeEditor(lines: 400)
-
-        // Assert
-        let gutter = try ruler(of: scrollView)
-        let textView = try #require(scrollView.documentView as? NSTextView)
-        #expect(textView.convert(NSPoint.zero, to: scrollView).x >= gutter.ruleThickness)
-    }
-
-    /// A body with no gutter -- the raw view of a response -- gets the full
-    /// width back, rather than keeping an empty strip where numbers used to be.
-    @Test func droppingTheGutterGivesTheWidthBack() {
-        // Arrange
-        let scrollView = makeEditor(lines: 400)
-        #expect(scrollView.contentView.contentInsets.left > 0)
-
-        // Act
-        CodeEditor.syncGutter(nil, on: scrollView, onToggleFold: { _ in })
-        scrollView.layoutSubtreeIfNeeded()
-
-        // Assert
-        #expect(scrollView.rulersVisible == false)
-        #expect(scrollView.contentView.contentInsets.left == 0)
-    }
-
-    /// Raw and back again. The gutter returns at the width it already had, so
-    /// nothing on the re-tile path notices -- but the room for it is taken
-    /// back as a left inset, and a document still sitting at the offset it
-    /// used while there was no gutter is now underneath one.
-    @Test func restoringTheGutterPutsTheDocumentBackAtTheStartOfItsLines() throws {
-        // Arrange -- shown, dropped for the raw view
-        let scrollView = makeEditor(lines: 400)
-        let thickness = try ruler(of: scrollView).ruleThickness
-        CodeEditor.syncGutter(nil, on: scrollView, onToggleFold: { _ in })
-        scrollView.layoutSubtreeIfNeeded()
-
-        // Act -- and back to pretty, the same document and the same gutter
-        CodeEditor.syncGutter(gutterSource(of: scrollView), on: scrollView, onToggleFold: { _ in })
-        scrollView.layoutSubtreeIfNeeded()
-
-        // Assert
-        let clipView = scrollView.contentView
-        #expect(try ruler(of: scrollView).ruleThickness == thickness)
-        #expect(clipView.contentInsets.left == thickness)
-        #expect(clipView.bounds.origin.x == -clipView.contentInsets.left)
-
-        // ...and the way a reader would check it.
-        let textView = try #require(scrollView.documentView as? NSTextView)
-        #expect(textView.convert(NSPoint.zero, to: scrollView).x >= thickness)
+        editor.setGutter(source(for: text)) { _ in }
+        editor.layoutSubtreeIfNeeded()
+        return editor
     }
 
     /// The same source the panel would hand back, rebuilt from the text on
     /// screen rather than kept from before -- which is what switching the
     /// format does.
-    private func gutterSource(of scrollView: NSScrollView) -> LineNumberRuler.Source {
-        let text = (scrollView.documentView as? NSTextView)?.string ?? ""
+    private func source(for text: String) -> LineNumberGutter.Source {
         let document = FoldableText.plain(text)
         return .init(
             document: document,
@@ -138,5 +53,153 @@ struct GutterGeometryTests {
             folded: [],
             showsFoldControls: false
         )
+    }
+
+    private func gutter(of editor: GutteredEditor) throws -> LineNumberGutter {
+        try #require(editor.subviews.compactMap { $0 as? LineNumberGutter }.first)
+    }
+
+    /// Where the reader sees the leftmost column of text: the document offset
+    /// currently at the viewport's left edge, in the editor's own coordinates.
+    /// Anything below the gutter's right edge is hidden underneath it.
+    private func leftEdgeOfText(in editor: GutteredEditor) -> CGFloat {
+        let scrolledTo = editor.scrollView.contentView.bounds.origin
+        return editor.textView.convert(NSPoint(x: scrolledTo.x, y: 0), to: editor).x
+    }
+
+    /// The gutter has to be wider than AppKit's default reservation for any of
+    /// this to matter -- three digits and a margin already are -- and it takes
+    /// that width out of the scroll view rather than off the top of it.
+    @Test func theGutterTakesItsOwnColumn() throws {
+        // Arrange / Act
+        let editor = makeEditor(lines: 400)
+
+        // Assert
+        let gutter = try gutter(of: editor)
+        #expect(gutter.thickness > 16)
+        #expect(editor.scrollView.frame.minX == gutter.frame.maxX)
+        #expect(editor.scrollView.frame.width == editor.bounds.width - gutter.thickness)
+        // The inset was the whole mechanism of the old overlap. There isn't one.
+        #expect(editor.scrollView.contentView.contentInsets.left == 0)
+    }
+
+    /// The first characters of every line have to be on screen. Nobody
+    /// scrolled, so the document is at the start of its lines -- plain zero,
+    /// with no inset to subtract.
+    @Test func theDocumentStartsAtTheStartOfItsLines() throws {
+        // Arrange / Act
+        let editor = makeEditor(lines: 400)
+
+        // Assert
+        #expect(editor.scrollView.contentView.bounds.origin.x == 0)
+        #expect(try leftEdgeOfText(in: editor) >= gutter(of: editor).frame.maxX)
+    }
+
+    /// Scrolled sideways through an unwrapped body -- the response body's
+    /// default -- the column at the left edge of the viewport is still one the
+    /// reader can see. Under a ruler it was the column *behind* the numbers.
+    @Test func scrollingSidewaysKeepsTheTextOutFromUnderTheGutter() throws {
+        // Arrange
+        let editor = makeEditor(lines: 400)
+        let clipView = editor.scrollView.contentView
+
+        // Act
+        clipView.scroll(to: NSPoint(x: 200, y: 0))
+        editor.scrollView.reflectScrolledClipView(clipView)
+        editor.layoutSubtreeIfNeeded()
+
+        // Assert
+        #expect(clipView.bounds.origin.x == 200)
+        #expect(try leftEdgeOfText(in: editor) >= gutter(of: editor).frame.maxX)
+    }
+
+    /// The reported bug: resizing the window while the body is scrolled
+    /// sideways re-clamps the scroll offset, and every offset but one used to
+    /// put text under the numbers.
+    @Test func resizingWhileScrolledKeepsTheTextOutFromUnderTheGutter() throws {
+        // Arrange
+        let editor = makeEditor(lines: 400)
+        let clipView = editor.scrollView.contentView
+        clipView.scroll(to: NSPoint(x: 200, y: 0))
+        editor.scrollView.reflectScrolledClipView(clipView)
+        editor.layoutSubtreeIfNeeded()
+
+        // Act / Assert -- narrower, wider, and wider than the document itself
+        for width in [420.0, 780.0, 3000.0] as [CGFloat] {
+            editor.setFrameSize(NSSize(width: width, height: 400))
+            editor.layoutSubtreeIfNeeded()
+
+            let gutter = try gutter(of: editor)
+            #expect(leftEdgeOfText(in: editor) >= gutter.frame.maxX)
+            #expect(editor.scrollView.frame.minX == gutter.frame.maxX)
+        }
+    }
+
+    /// A wrapped line has to break at the edge the reader can see. The ruler
+    /// was not subtracted from `NSScrollView.contentSize`, so the text view was
+    /// laid out a gutter's width wider than the viewport and the tail of every
+    /// line sat off the right-hand side.
+    @Test func wrappingBreaksAtTheVisibleEdge() throws {
+        // Arrange
+        let editor = makeEditor(lines: 400)
+
+        // Act
+        editor.setWraps(true, unwrappedWidth: 0)
+        editor.layoutSubtreeIfNeeded()
+
+        // Assert
+        let gutter = try gutter(of: editor)
+        #expect(editor.textView.frame.width == editor.bounds.width - gutter.thickness)
+        #expect(editor.textView.frame.width <= editor.scrollView.contentSize.width)
+    }
+
+    /// A body with no gutter -- the raw view of a response -- gets the full
+    /// width back, rather than keeping an empty strip where numbers used to be.
+    @Test func droppingTheGutterGivesTheWidthBack() throws {
+        // Arrange
+        let editor = makeEditor(lines: 400)
+        #expect(try gutter(of: editor).thickness > 0)
+
+        // Act
+        editor.setGutter(nil) { _ in }
+        editor.layoutSubtreeIfNeeded()
+
+        // Assert
+        #expect(try gutter(of: editor).thickness == 0)
+        #expect(editor.scrollView.frame == editor.bounds)
+    }
+
+    /// Raw and back again, the round trip that used to leave the document at
+    /// the offset it had while there was no gutter -- which was the offset
+    /// where the gutter covered the start of every line.
+    @Test func restoringTheGutterPutsTheTextBackBesideIt() throws {
+        // Arrange -- shown, dropped for the raw view
+        let editor = makeEditor(lines: 400)
+        let thickness = try gutter(of: editor).thickness
+        editor.setGutter(nil) { _ in }
+        editor.layoutSubtreeIfNeeded()
+
+        // Act -- and back to pretty, the same document and the same gutter
+        editor.setGutter(source(for: editor.textView.string)) { _ in }
+        editor.layoutSubtreeIfNeeded()
+
+        // Assert
+        let gutter = try gutter(of: editor)
+        #expect(gutter.thickness == thickness)
+        #expect(editor.scrollView.frame.minX == thickness)
+        #expect(leftEdgeOfText(in: editor) >= gutter.frame.maxX)
+    }
+
+    /// The gutter is as tall as the text beside it, so it stops rather than
+    /// running down past the last row into the horizontal scroller's strip.
+    @Test func theGutterIsAsTallAsTheTextBesideIt() throws {
+        // Arrange / Act
+        let editor = makeEditor(lines: 400)
+
+        // Assert
+        let gutter = try gutter(of: editor)
+        let content = editor.convert(editor.scrollView.contentView.frame, from: editor.scrollView)
+        #expect(gutter.frame.height == content.height)
+        #expect(gutter.frame.minY == content.minY)
     }
 }
