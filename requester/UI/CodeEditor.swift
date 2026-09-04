@@ -432,6 +432,26 @@ final class GutteredEditor: NSView {
             setContentHuggingPriority(.defaultLow, for: axis)
             setContentCompressionResistancePriority(.defaultLow, for: axis)
         }
+
+        // The scroll view re-tiles for reasons of its own -- a scroller style
+        // change when a mouse is plugged in, or the system setting switched
+        // while the window is open -- which moves the clip view the gutter is
+        // matched to. An `NSRulerView` was tiled along with it and got this
+        // free; a sibling has to hear about it.
+        scrollView.contentView.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(clipViewDidResize),
+            name: NSView.frameDidChangeNotification,
+            object: scrollView.contentView
+        )
+    }
+
+    /// Ignored while laying out, where the clip view is being moved on purpose
+    /// and the gutter is placed against its final position anyway.
+    @objc private func clipViewDidResize() {
+        guard !isLayingOut else { return }
+        needsLayout = true
     }
 
     @available(*, unavailable)
@@ -444,23 +464,34 @@ final class GutteredEditor: NSView {
         needsLayout = true
     }
 
+    private var isLayingOut = false
+
     /// The gutter takes the width it needs from the left, the scroll view takes
     /// the rest. The gutter is matched to the *clip* view rather than to the
     /// whole scroll view, so it stops where the text does instead of running
     /// down beside a horizontal scroller.
+    ///
+    /// Wrapping is settled before the gutter is placed, because turning it off
+    /// is what puts that horizontal scroller there: measuring the clip view
+    /// first would size the gutter against a viewport a scroller's height taller
+    /// than the one the text ends up in.
     override func layout() {
         super.layout()
+        isLayingOut = true
+        defer { isLayingOut = false }
+
         let width = gutter?.thickness ?? 0
         scrollView.frame = NSRect(
             x: width, y: 0, width: max(bounds.width - width, 0), height: bounds.height
         )
+        applyWrapping()
+
         if let gutter {
             let content = convert(scrollView.contentView.frame, from: scrollView)
             gutter.frame = NSRect(
                 x: 0, y: content.minY, width: width, height: content.height
             )
         }
-        applyWrapping()
     }
 
     // MARK: - Gutter
@@ -505,9 +536,13 @@ final class GutteredEditor: NSView {
     /// from the view's -- they disagree by the text container inset, so every
     /// update would overwrite what the last layout pass had just worked out.
     func setWraps(_ wraps: Bool, unwrappedWidth: CGFloat) {
+        guard wraps != wrapsLines || unwrappedWidth != self.unwrappedWidth else { return }
         wrapsLines = wraps
         self.unwrappedWidth = unwrappedWidth
-        applyWrapping()
+        // Through a layout pass rather than straight to `applyWrapping`: the
+        // toggle can add or remove the horizontal scroller, and the gutter has
+        // to be re-measured against what that leaves of the clip view.
+        needsLayout = true
     }
 
     private func applyWrapping() {

@@ -62,6 +62,11 @@ struct GutterGeometryTests {
     /// Where the reader sees the leftmost column of text: the document offset
     /// currently at the viewport's left edge, in the editor's own coordinates.
     /// Anything below the gutter's right edge is hidden underneath it.
+    ///
+    /// With no content inset this reduces to the scroll view's own left edge,
+    /// so it says little about the layout as it now stands. It is written the
+    /// long way on purpose: against the ruler it evaluated to zero at any
+    /// scroll position but the first, and that is the regression it guards.
     private func leftEdgeOfText(in editor: GutteredEditor) -> CGFloat {
         let scrolledTo = editor.scrollView.contentView.bounds.origin
         return editor.textView.convert(NSPoint(x: scrolledTo.x, y: 0), to: editor).x
@@ -147,10 +152,13 @@ struct GutterGeometryTests {
         editor.setWraps(true, unwrappedWidth: 0)
         editor.layoutSubtreeIfNeeded()
 
-        // Assert
+        // Assert -- the text lays out to the viewport it is actually in, and
+        // that viewport is what is left of the editor once the gutter has its
+        // column. Stated against `contentSize` rather than against the editor's
+        // own width, which would disagree by a legacy vertical scroller.
         let gutter = try gutter(of: editor)
-        #expect(editor.textView.frame.width == editor.bounds.width - gutter.thickness)
-        #expect(editor.textView.frame.width <= editor.scrollView.contentSize.width)
+        #expect(editor.textView.frame.width == editor.scrollView.contentSize.width)
+        #expect(editor.textView.frame.width <= editor.bounds.width - gutter.thickness)
     }
 
     /// A body with no gutter -- the raw view of a response -- gets the full
@@ -192,14 +200,52 @@ struct GutterGeometryTests {
 
     /// The gutter is as tall as the text beside it, so it stops rather than
     /// running down past the last row into the horizontal scroller's strip.
-    @Test func theGutterIsAsTallAsTheTextBesideIt() throws {
-        // Arrange / Act
+    ///
+    /// Forced to legacy scrollers, which take real height out of the clip view.
+    /// Overlay scrollers -- the default, and what CI has -- float over the text
+    /// and leave nothing to collide with, so the property is invisible there.
+    @Test func theGutterStopsWhereTheTextDoes() throws {
+        // Arrange -- unwrapped and wider than the viewport, so there is one
         let editor = makeEditor(lines: 400)
+
+        // Act
+        editor.scrollView.scrollerStyle = .legacy
+        editor.layoutSubtreeIfNeeded()
 
         // Assert
         let gutter = try gutter(of: editor)
-        let content = editor.convert(editor.scrollView.contentView.frame, from: editor.scrollView)
-        #expect(gutter.frame.height == content.height)
-        #expect(gutter.frame.minY == content.minY)
+        let scroller = try #require(editor.scrollView.horizontalScroller)
+        #expect(editor.scrollView.hasHorizontalScroller)
+        #expect(gutter.frame.height < editor.bounds.height)
+        #expect(!gutter.frame.intersects(editor.convert(scroller.frame, from: editor.scrollView)))
+    }
+
+    /// Turning wrapping off is what puts the horizontal scroller there, and it
+    /// arrives without any frame change to prompt a layout -- so the gutter was
+    /// left measured against a viewport a scroller's height taller than the one
+    /// the text ended up in.
+    @Test func togglingWrapResizesTheGutterWithTheViewport() throws {
+        // Arrange -- wrapped, so there is no horizontal scroller yet
+        let editor = makeEditor(lines: 400)
+        editor.scrollView.scrollerStyle = .legacy
+        editor.setWraps(true, unwrappedWidth: 0)
+        editor.layoutSubtreeIfNeeded()
+        let wrappedHeight = try gutter(of: editor).frame.height
+
+        // Act -- back to unwrapped, which brings the scroller with it
+        editor.setWraps(
+            false,
+            unwrappedWidth: CodeEditor.unwrappedWidth(
+                longestLineLength: FoldableText.plain(editor.textView.string)
+                    .projected(folding: []).longestLineLength
+            )
+        )
+        editor.layoutSubtreeIfNeeded()
+
+        // Assert
+        let gutter = try gutter(of: editor)
+        #expect(gutter.frame.height < wrappedHeight)
+        let scroller = try #require(editor.scrollView.horizontalScroller)
+        #expect(!gutter.frame.intersects(editor.convert(scroller.frame, from: editor.scrollView)))
     }
 }
