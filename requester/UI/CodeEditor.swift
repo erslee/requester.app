@@ -58,9 +58,7 @@ struct CodeEditor: NSViewRepresentable {
         context.coordinator.onToggleFold = onToggleFold
         textView.string = text
         context.coordinator.displayedText = text
-        editor.setGutter(gutter) { [weak coordinator = context.coordinator] line in
-            coordinator?.onToggleFold?(line)
-        }
+        syncGutter(on: editor, coordinator: context.coordinator)
         return editor
     }
 
@@ -121,7 +119,13 @@ struct CodeEditor: NSViewRepresentable {
 
         // The gutter draws from the projection, so it is refreshed whenever the
         // text it numbers might have moved. Redrawing costs a screenful.
-        editor.setGutter(gutter) { [weak coordinator = context.coordinator] line in
+        syncGutter(on: editor, coordinator: context.coordinator)
+    }
+
+    /// The fold triangles report to the coordinator, which is what holds the
+    /// caller's handler. Weakly, since the gutter outlives any one update.
+    private func syncGutter(on editor: GutteredEditor, coordinator: Coordinator) {
+        editor.setGutter(gutter) { [weak coordinator] line in
             coordinator?.onToggleFold?(line)
         }
     }
@@ -404,6 +408,12 @@ final class GutteredEditor: NSView {
     private var wrapsLines = true
     private var unwrappedWidth: CGFloat = 0
 
+    /// Which way the text was last actually laid out, so a layout pass that
+    /// changes neither the mode nor the width does nothing at all. Nil until
+    /// the first pass. Read as "what is on screen", against `wrapsLines`'s
+    /// "what has been asked for".
+    private var appliedWrapped: Bool?
+
     init(isEditable: Bool) {
         textView = PastingTextView()
         textView.isEditable = isEditable
@@ -555,9 +565,13 @@ final class GutteredEditor: NSView {
             ? scrollView.contentSize.width
             : max(unwrappedWidth, scrollView.contentSize.width)
 
-        guard textView.isHorizontallyResizable == wrapped
-            || abs(textView.frame.width - width) > 0.5
+        // Against what was last applied, not against `isHorizontallyResizable`
+        // -- which is assigned false unconditionally below and defaults to
+        // false, so it only ever restated `!wrapped` and left the unwrapped
+        // case re-running the whole body on every pass.
+        guard appliedWrapped != wrapped || abs(textView.frame.width - width) > 0.5
         else { return }
+        appliedWrapped = wrapped
 
         container.widthTracksTextView = true
         textView.isHorizontallyResizable = false
