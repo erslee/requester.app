@@ -46,9 +46,9 @@ There is no linter or formatter configured.
   the annotation silently pulls domain logic onto the main actor.
 - `PRODUCT_NAME = Requester` but `PRODUCT_MODULE_NAME = requester` — tests use
   `@testable import requester`.
-- Sandboxed, and all four entitlements are load-bearing: outgoing network,
-  user-selected files read-write, app-scoped bookmarks (custom data folder across
-  launches), and the sandbox itself.
+- Sandboxed, and all three entitlements are load-bearing: outgoing network,
+  user-selected files read-write (the collection importer), and the sandbox
+  itself.
 
 ## Architecture
 
@@ -99,8 +99,9 @@ write is in flight.
 manual timeout race (not a task group — a group awaits children, and a hung
 script never returns). It is a hang-safety boundary, not a security sandbox.
 
-**Data folder resolution** lives in `StorageRootStore` (security-scoped
-bookmark in `UserDefaults`) and `LaunchState` in `requesterApp.swift`. The
+**Data folder resolution** lives in `StorageRootStore` (the container's
+`Application Support/Requester`, and nothing else — the folder is not
+configurable) and `LaunchState` in `requesterApp.swift`. The
 `REQUESTER_DATA_ROOT` environment variable overrides it — a bare name resolves
 inside the app's own container, which is how UI tests get a throwaway folder.
 

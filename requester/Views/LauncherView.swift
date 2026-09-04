@@ -271,10 +271,6 @@ struct LauncherView: View {
             Label("Could Not Open Your Data", systemImage: "folder.badge.questionmark")
         } description: {
             Text(message)
-        } actions: {
-            Button("Use the Default Folder") { launch.useDefaultFolder() }
-                .buttonStyle(.borderedProminent)
-            Button("Choose a Folder…") { launch.isChoosingFolder = true }
         }
     }
 

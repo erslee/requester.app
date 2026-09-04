@@ -39,8 +39,7 @@ final class MenuCommandsUITests: XCTestCase {
         XCTAssertTrue(app.menuItems["New Project"].isEnabled)
         XCTAssertTrue(app.menuItems["Open Project…"].exists, "Open Project is missing.")
 
-        // Assert -- the data-folder commands are still there, below it
+        // Assert -- the data-folder command is still there, below it
         XCTAssertTrue(app.menuItems["Reveal Data Folder in Finder"].exists)
-        XCTAssertTrue(app.menuItems["Change Data Folder…"].exists)
     }
 }

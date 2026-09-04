@@ -66,15 +66,14 @@ xcodebuild -project requester.xcodeproj -scheme requester \
            -destination 'platform=macOS' -only-testing:requesterTests test
 ```
 
-330 unit tests (Swift Testing), plus 7 UI tests that drive the real app — drop
+335 unit tests (Swift Testing), plus 7 UI tests that drive the real app — drop
 `-only-testing` to run both. The curl importer and exporter are tested against each
 other, so the two cannot drift.
 
 ## Your data
 
-Plain files, in the app's own container by default — no prompt, nothing to configure.
-**File → Reveal Data Folder in Finder** opens it; **Change Data Folder…** points the app
-at a synced folder or a git repository instead.
+Plain files, in the app's own container — no prompt, nothing to configure.
+**File → Reveal Data Folder in Finder** opens it.
 
 ```
 projects/<id>/project.json            metadata + global headers
