@@ -2,10 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Lets the app create a security-scoped bookmark for the data folder the
-	     user picks, so it is still reachable after a relaunch. Without this the
-	     folder would have to be chosen again on every launch. -->
-	<key>com.apple.security.files.bookmarks.app-scope</key>
-	<true/>
+	<!-- The sandbox, outgoing network connections, and read-write access to
+	     user-selected files come from the target's build settings and are
+	     merged in at signing time. Nothing extra is needed here: the data
+	     folder lives in the app's own container. -->
 </dict>
 </plist>

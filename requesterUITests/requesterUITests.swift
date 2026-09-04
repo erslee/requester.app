@@ -118,20 +118,17 @@ final class RequesterUITests: XCTestCase {
     }
 
     @MainActor
-    func testFileMenuOffersTheDataFolderCommands() throws {
+    func testFileMenuOffersTheDataFolderCommand() throws {
         // Act
         let fileMenu = app.menuBars.menuBarItems["File"]
         XCTAssertTrue(fileMenu.waitForExistence(timeout: 20))
         fileMenu.click()
 
-        // Assert
+        // Assert -- the folder is fixed, so revealing it is the only command
         XCTAssertTrue(
             app.menuItems["Reveal Data Folder in Finder"].waitForExistence(timeout: 5),
             "Reveal Data Folder is missing."
         )
-        XCTAssertTrue(app.menuItems["Change Data Folder…"].exists)
-
-        // Already on the default folder, so reverting to it is a no-op
-        XCTAssertFalse(app.menuItems["Use Default Data Folder"].isEnabled)
+        XCTAssertFalse(app.menuItems["Change Data Folder…"].exists)
     }
 }

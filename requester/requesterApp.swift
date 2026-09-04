@@ -67,9 +67,6 @@ struct RequesterApp: App {
 
             Divider()
             Button("Reveal Data Folder in Finder") { launch.revealDataFolder() }
-            Button("Change Data Folder…") { launch.isChoosingFolder = true }
-            Button("Use Default Data Folder") { launch.useDefaultFolder() }
-                .disabled(launch.isUsingDefaultFolder)
         }
 
         CommandGroup(after: .textEditing) {
@@ -147,7 +144,7 @@ private struct ProjectWindow: View {
             if let model {
                 ContentView(model: model)
             } else if case .failed(let message) = launch.phase {
-                DataFolderProblemView(launch: launch, message: message)
+                DataFolderProblemView(message: message)
             } else {
                 // A window restored by macOS with no project value, or one whose
                 // project has since gone from the data folder.
@@ -176,7 +173,6 @@ private struct ProjectWindow: View {
 /// Shown when the data folder itself could not be opened -- there is nothing to
 /// show a project from until that is resolved.
 private struct DataFolderProblemView: View {
-    let launch: LaunchState
     let message: String
 
     var body: some View {
@@ -184,10 +180,6 @@ private struct DataFolderProblemView: View {
             Label("Could Not Open Your Data", systemImage: "folder.badge.questionmark")
         } description: {
             Text(message)
-        } actions: {
-            Button("Use the Default Folder") { launch.useDefaultFolder() }
-                .buttonStyle(.borderedProminent)
-            Button("Choose a Folder…") { launch.isChoosingFolder = true }
         }
     }
 }
@@ -196,9 +188,9 @@ private struct DataFolderProblemView: View {
 /// everything that is about the folder as a whole rather than about one
 /// project. Shared by every window.
 ///
-/// There is no first-run prompt: the default folder needs no permission, so the
-/// app comes up straight into the launcher. Pointing it at a different folder
-/// is an explicit choice from the File menu.
+/// There is no first-run prompt and nothing to configure: the folder lives in
+/// the app's own container, needs no permission, and the app comes up straight
+/// into the launcher.
 @MainActor
 @Observable
 final class LaunchState {
@@ -213,14 +205,10 @@ final class LaunchState {
     /// folder (their runner is sandboxed too and cannot create one there).
     static let dataRootEnvironmentKey = "REQUESTER_DATA_ROOT"
 
-    private let roots = StorageRootStore()
     let recents = RecentProjectsStore()
 
     private(set) var phase: Phase = .failed("")
     private(set) var currentRoot: URL?
-
-    /// Drives the folder picker, which is only ever opened deliberately.
-    var isChoosingFolder = false
 
     /// Whether the collection picker is open, kept separate from whether an
     /// import is running -- sharing one flag would have the picker reopen
@@ -246,8 +234,6 @@ final class LaunchState {
     /// window writes it on the first change; see `AppModel`.
     private var unsavedProjects: [String: Project] = [:]
 
-    var isUsingDefaultFolder: Bool { roots.isUsingDefaultRoot }
-
     var storage: LocalFileStorage? {
         guard case .ready(let storage) = phase else { return nil }
         return storage
@@ -258,18 +244,6 @@ final class LaunchState {
     }
 
     // MARK: - The data folder
-
-    func adopt(_ url: URL) {
-        do {
-            open(try roots.adopt(url))
-        } catch {
-            phase = .failed(Self.describe(error))
-        }
-    }
-
-    func useDefaultFolder() {
-        open(roots.useDefaultRoot())
-    }
 
     /// The default folder lives inside the sandbox container, where it is not
     /// obvious in Finder -- so there is a command to go straight to it.
@@ -285,7 +259,7 @@ final class LaunchState {
                 ? URL(filePath: path, directoryHint: .isDirectory)
                 : FileManager.default.temporaryDirectory.appending(path: path)
         }
-        return roots.resolveRoot()
+        return StorageRootStore.defaultRoot
     }
 
     private func open(_ url: URL) {
